@@ -1,0 +1,172 @@
+{
+  "identity": {
+    "name": "AgriGear ERP",
+    "persona": "E1 - The Anti-AI Designer",
+    "vibe": "Industrial Clean. Reliable. Heavy Metal meets Silicon.",
+    "archetype": "Organic & Earthy (Professional Variant)",
+    "principles": [
+      "Fusion: Agriculture x Fintech Precision",
+      "Emotion: Trust & Robustness",
+      "Content: Data is the Hero",
+      "Zoom: Focus on Machine Health & Status",
+      "Contrast: High visibility for safety/alerts"
+    ]
+  },
+  "typography": {
+    "headings": {
+      "family": "Manrope, sans-serif",
+      "weights": ["600", "700", "800"],
+      "usage": "Page titles, Card headers, Modal titles",
+      "letterSpacing": "tracking-tight"
+    },
+    "body": {
+      "family": "Public Sans, sans-serif",
+      "weights": ["400", "500"],
+      "usage": "General text, form labels, descriptions"
+    },
+    "technical": {
+      "family": "JetBrains Mono, monospace",
+      "weights": ["400", "500"],
+      "usage": "Machine IDs, VINs, Error Codes, Financial Figures, Dates",
+      "className": "font-mono text-xs tracking-wide text-muted-foreground"
+    }
+  },
+  "colors": {
+    "palette": {
+      "primary": {
+        "DEFAULT": "#0F3D3E",
+        "foreground": "#FFFFFF",
+        "description": "Deep Evergreen - Professional, Trustworthy, Earthy"
+      },
+      "secondary": {
+        "DEFAULT": "#F1F5F9",
+        "foreground": "#0F172A",
+        "description": "Slate 100 - Administrative Background"
+      },
+      "accent": {
+        "DEFAULT": "#F97316",
+        "foreground": "#FFFFFF",
+        "description": "Safety Orange - Alerts, Actions, Critical Status"
+      },
+      "muted": {
+        "DEFAULT": "#F8FAFC",
+        "foreground": "#64748B"
+      },
+      "card": {
+        "DEFAULT": "#FFFFFF",
+        "foreground": "#020617"
+      },
+      "border": "#E2E8F0"
+    },
+    "status": {
+      "success": "#10B981",
+      "warning": "#F59E0B",
+      "error": "#EF4444",
+      "info": "#3B82F6"
+    },
+    "gradients": {
+      "hero": "linear-gradient(135deg, #0F3D3E 0%, #1E5657 100%)",
+      "metallic": "linear-gradient(180deg, #F8FAFC 0%, #E2E8F0 100%)"
+    }
+  },
+  "layout_strategy": {
+    "dashboard": {
+      "type": "Bento Grid (Mode B: Control Room)",
+      "grid_cols": "grid-cols-1 md:grid-cols-4 lg:grid-cols-12",
+      "gap": "gap-4 md:gap-6",
+      "padding": "p-4 md:p-8"
+    },
+    "containers": {
+      "card": "bg-card border border-border shadow-sm rounded-lg overflow-hidden",
+      "panel": "bg-white border border-border/60 shadow-sm rounded-xl p-6"
+    },
+    "spacing": {
+      "section_gap": "gap-8",
+      "internal_padding": "p-6"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-primary text-primary-foreground hover:bg-primary/90 shadow-md rounded-md px-6 py-2 font-medium transition-all active:scale-95",
+      "secondary": "bg-white border border-input hover:bg-accent hover:text-accent-foreground shadow-sm rounded-md px-6 py-2 transition-all",
+      "destructive": "bg-destructive text-destructive-foreground hover:bg-destructive/90 rounded-md px-6 py-2 shadow-sm"
+    },
+    "cards": {
+      "machinery_card": {
+        "style": "border-l-4 border-l-primary bg-white shadow-md hover:shadow-lg transition-shadow",
+        "header": "bg-muted/30 border-b border-border p-4 flex justify-between items-center",
+        "content": "p-4 space-y-4"
+      },
+      "stat_card": {
+        "style": "bg-white border border-border p-6 rounded-xl shadow-sm flex flex-col justify-between h-full hover:border-primary/50 transition-colors"
+      }
+    },
+    "tables": {
+      "style": "w-full caption-bottom text-sm",
+      "header": "border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted",
+      "row": "border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted",
+      "cell": "p-4 align-middle [&:has([role=checkbox])]:pr-0"
+    },
+    "badges": {
+      "base": "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+      "variants": {
+        "default": "border-transparent bg-primary text-primary-foreground hover:bg-primary/80",
+        "secondary": "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        "destructive": "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80",
+        "outline": "text-foreground"
+      }
+    }
+  },
+  "visual_enhancers": {
+    "textures": {
+      "noise": "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.05'/%3E%3C/svg%3E\")"
+    },
+    "shadows": {
+      "layered": "0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)",
+      "lifted": "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -2px rgb(0 0 0 / 0.05)"
+    },
+    "borders": {
+      "technical": "1px solid #E2E8F0"
+    }
+  },
+  "image_urls": {
+    "hero": {
+      "url": "https://images.unsplash.com/photo-1758608951432-773ae6a33f56?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjB0cmFjdG9yJTIwaW4lMjBmaWVsZHxlbnwwfHx8fDE3NjgxMzY0NDh8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Modern tractor in field at sunset",
+      "usage": "Login page background, Dashboard Hero"
+    },
+    "maintenance": {
+      "url": "https://images.unsplash.com/photo-1659958196981-0be9d1b7c446?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njd8MHwxfHNlYXJjaHwyfHxmYXJtJTIwbWFjaGluZXJ5JTIwbWVjaGFuaWMlMjB3b3JraW5nfGVufDB8fHx8MTc2ODE0NDYzOHww&ixlib=rb-4.1.0&q=85",
+      "alt": "Mechanic repairing machinery",
+      "usage": "Maintenance module, Service alerts"
+    },
+    "farmer_avatar": {
+      "url": "https://images.unsplash.com/photo-1595956481935-a9e254951d49?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwyfHxmYXJtZXIlMjBwb3J0cmFpdCUyMHByb2Zlc3Npb25hbHxlbnwwfHx8fDE3NjgxNDQ2NDB8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Professional farmer portrait",
+      "usage": "User profile, Farmer master data sample"
+    },
+    "machinery_thumb_1": {
+      "url": "https://images.unsplash.com/photo-1679128719010-aaa99859ad97?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjB0cmFjdG9yJTIwaW4lMjBmaWVsZHxlbnwwfHx8fDE3NjgxMzY0NDh8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Tractor side view",
+      "usage": "Machinery list thumbnail"
+    }
+  },
+  "instructions_to_main_agent": [
+    "1. THEME: Implement a 'Light Mode' first strategy. Use the Deep Evergreen (#0F3D3E) for sidebars and primary actions to ground the lightness.",
+    "2. LAYOUT: Use a persistent Sidebar Navigation (Collapsible) for ERP modules. Top bar for Global Search, Notifications, and User Profile.",
+    "3. DASHBOARD: The 'Management' dashboard must use the Bento Grid. Mix 'Stat Cards' (Single metric), 'Chart Cards' (Revenue/Utilization), and 'List Cards' (Recent Bookings).",
+    "4. FORMS: ERPs are form-heavy. Use 'Sheet' (Side drawer) for quick edits and 'Dialog' (Modal) for critical confirmations. Full pages for complex creations (New Booking).",
+    "5. DATA: Use 'TanStack Table' (React Table) for all master data lists. Implement Sorting, Filtering, and Pagination by default.",
+    "6. MICRO-INTERACTIONS: Add hover states to table rows. Use 'Sonner' for toast notifications on every success/error action.",
+    "7. AUTH: Create a clean, split-screen Login page. Left side: Hero Image with overlay. Right side: Login Form.",
+    "8. ROLE-BASED: Ensure the UI adapts. If 'Mechanic' logs in, they see Maintenance tasks first, not Financial reports."
+  ],
+  "universal_guidelines": [
+    "Do not use gradients for text.",
+    "Avoid 'Inter' for Headings. Use 'Manrope'.",
+    "Use 'JetBrains Mono' for all IDs, Dates, and Currency figures.",
+    "Ensure all interactive elements have 'data-testid'.",
+    "Use 'lucide-react' for icons.",
+    "Charts: Use 'Recharts' with the custom color palette defined above."
+  ]
+}

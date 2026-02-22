@@ -1,0 +1,652 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import api from '../api/axios';
+import { useAuth } from '../context/AuthContext';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { toast } from 'sonner';
+import { Plus, Wrench, CheckCircle, XCircle, UserPlus, Star, AlertTriangle, RefreshCw } from 'lucide-react';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+
+// ── Leaflet default icon fix ──────────────────────────────────────────────────
+import icon from 'leaflet/dist/images/marker-icon.png';
+import iconShadow from 'leaflet/dist/images/marker-shadow.png';
+let DefaultIcon = L.icon({ iconUrl: icon, shadowUrl: iconShadow, iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41] });
+L.Marker.prototype.options.icon = DefaultIcon;
+
+// Red pin for broken machine
+const redIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+  shadowUrl: iconShadow,
+  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
+});
+
+// Blue pin for mechanic
+const blueIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+  shadowUrl: iconShadow,
+  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41],
+});
+
+// ── Star Rating component ─────────────────────────────────────────────────────
+function StarRating({ value, onChange, size = 6 }) {
+  const [hovered, setHovered] = useState(0);
+  return (
+    <div className="flex gap-1">
+      {[1, 2, 3, 4, 5].map(star => (
+        <button
+          key={star}
+          type="button"
+          className={`h-${size} w-${size} transition-colors ${(hovered || value) >= star ? 'text-yellow-400' : 'text-muted-foreground'}`}
+          onMouseEnter={() => setHovered(star)}
+          onMouseLeave={() => setHovered(0)}
+          onClick={() => onChange(star)}
+        >
+          <Star className={`h-${size} w-${size} ${(hovered || value) >= star ? 'fill-yellow-400' : ''}`} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── Mechanic rating badge ─────────────────────────────────────────────────────
+function RatingBadge({ avg, count }) {
+  if (!count) return <span className="text-xs text-muted-foreground ml-1">(no reviews)</span>;
+  return (
+    <span className="ml-1 text-xs text-yellow-600 font-semibold">
+      ⭐ {avg} <span className="text-muted-foreground font-normal">({count})</span>
+    </span>
+  );
+}
+
+export default function MaintenancePage() {
+  const { user } = useAuth();
+  const isMechanic = user?.role === 'mechanic';
+  const isOrgAdmin = user?.role === 'org_admin';
+
+  const [records, setRecords] = useState([]);
+  const [machinery, setMachinery] = useState([]);
+  const [mechanics, setMechanics] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Dialogs
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false);
+  const [rateDialogOpen, setRateDialogOpen] = useState(false);
+  const [materialDialogOpen, setMaterialDialogOpen] = useState(false);
+
+  const [selectedRecord, setSelectedRecord] = useState(null);
+  const [assignMechanicId, setAssignMechanicId] = useState('');
+
+  // Create maintenance form
+  const [formData, setFormData] = useState({ machinery_id: '', service_type: '', mechanic_id: '' });
+
+  // Rate mechanic form
+  const [ratingValue, setRatingValue] = useState(0);
+  const [ratingFeedback, setRatingFeedback] = useState('');
+  const [ratingSubmitting, setRatingSubmitting] = useState(false);
+
+  // Material request (mechanic)
+  const [materialData, setMaterialData] = useState({ maintenance_id: '', item_name: '', estimated_cost: '' });
+
+  // ── Data fetching ─────────────────────────────────────────────────────────
+  const fetchData = useCallback(async () => {
+    try {
+      const promises = [api.get('/maintenance'), api.get('/machinery')];
+      if (isOrgAdmin) promises.push(api.get('/org/mechanics/available'));
+      const results = await Promise.all(promises);
+      setRecords(results[0].data);
+      setMachinery(results[1].data);
+      if (isOrgAdmin && results[2]) {
+        const data = Array.isArray(results[2].data) ? results[2].data : [];
+        console.log('[MaintenancePage] available mechanics:', data);
+        setMechanics(data);
+      }
+    } catch {
+      toast.error('Failed to load data');
+    } finally {
+      setLoading(false);
+    }
+  }, [isOrgAdmin]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Debug: print job list for mechanics
+  useEffect(() => {
+    if (isMechanic) {
+      console.log('MECHANIC JOBS:', records);
+      console.log('MECHANIC pending_acceptance:', records.filter(r => r.status === 'pending_acceptance'));
+    }
+  }, [records, isMechanic]);
+
+  // ── Create maintenance ────────────────────────────────────────────────────
+  const handleCreate = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post('/maintenance', formData);
+      toast.success('Maintenance record created');
+      setDialogOpen(false);
+      setFormData({ machinery_id: '', service_type: '', mechanic_id: '' });
+      fetchData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to create maintenance');
+    }
+  };
+
+  // ── Mechanic workflow ─────────────────────────────────────────────────────
+  const handleAcceptJob = async (id) => {
+    try {
+      await api.put(`/maintenance/${id}/accept`);
+      toast.success('Job accepted! Get to work 🔧');
+      fetchData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to accept job');
+    }
+  };
+
+  const handleRejectJob = async (id) => {
+    if (!window.confirm('Reject this job? It will be returned to the pending pool.')) return;
+    try {
+      await api.put(`/maintenance/${id}/reject`);
+      toast.info('Job rejected, returned to pool');
+      fetchData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to reject job');
+    }
+  };
+
+  const handleCompleteJob = async (id) => {
+    try {
+      await api.put(`/maintenance/${id}/complete`);
+      toast.success('Job marked as completed ✅');
+      fetchData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to complete job');
+    }
+  };
+
+  // ── Manager: Assign mechanic ──────────────────────────────────────────────
+  const openAssignDialog = (record) => {
+    setSelectedRecord(record);
+    setAssignMechanicId('');
+    setAssignDialogOpen(true);
+  };
+
+  const handleAssignMechanic = async (e) => {
+    e.preventDefault();
+    if (!assignMechanicId) { toast.error('Please select a mechanic'); return; }
+    try {
+      await api.put(`/maintenance/${selectedRecord.maintenance_id}/assign`, {
+        mechanic_username: assignMechanicId
+      });
+      toast.success('Mechanic assigned successfully');
+      setAssignDialogOpen(false);
+      fetchData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to assign mechanic');
+    }
+  };
+
+  // ── Manager: Rate mechanic ────────────────────────────────────────────────
+  const openRateDialog = (record) => {
+    setSelectedRecord(record);
+    setRatingValue(0);
+    setRatingFeedback('');
+    setRateDialogOpen(true);
+  };
+
+  const handleSubmitRating = async (e) => {
+    e.preventDefault();
+    if (ratingValue === 0) { toast.error('Please select a star rating'); return; }
+    setRatingSubmitting(true);
+    try {
+      await api.post(`/maintenance/${selectedRecord.maintenance_id}/review`, {
+        rating: ratingValue,
+        feedback: ratingFeedback
+      });
+      toast.success(`Rating submitted! ⭐ ${ratingValue}/5`);
+      setRateDialogOpen(false);
+      fetchData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to submit rating');
+    } finally {
+      setRatingSubmitting(false);
+    }
+  };
+
+  // ── Mechanic: request spare parts ─────────────────────────────────────────
+  const handleMechanicPartsRequest = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post(`/mechanic/jobs/${materialData.maintenance_id}/parts`, {
+        part_name: materialData.item_name,
+        estimated_cost: parseFloat(materialData.estimated_cost)
+      });
+      toast.success('Spare parts request submitted!');
+      setMaterialDialogOpen(false);
+      setMaterialData({ maintenance_id: '', item_name: '', estimated_cost: '' });
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to submit parts request');
+    }
+  };
+
+  // ── Status helpers ────────────────────────────────────────────────────────
+  const STATUS_COLOR = {
+    completed: 'bg-green-100 text-green-700',
+    in_progress: 'bg-blue-100 text-blue-700',
+    pending_acceptance: 'bg-indigo-100 text-indigo-700',
+    pending_assignment: 'bg-yellow-100 text-yellow-700',
+    pending: 'bg-orange-100 text-orange-700',
+    rejected: 'bg-red-100 text-red-700',
+  };
+
+  const STATUS_LABEL = {
+    pending_acceptance: 'Awaiting Mechanic Acceptance',
+    pending_assignment: 'Pending Assignment',
+    in_progress: 'In Progress',
+    completed: 'Completed',
+    pending: 'Pending',
+    rejected: 'Mechanic Rejected — Reassign',
+  };
+
+  const statusLabel = (s) => STATUS_LABEL[s] || (s || 'pending').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  const statusColor = (status) => STATUS_COLOR[status] || 'bg-gray-100 text-gray-700';
+
+  // ── Geospatial helpers ────────────────────────────────────────────────────
+  const getMachineLocation = (record) => {
+    const m = machinery.find(m => m.machinery_id === record?.machinery_id);
+    if (!m?.location?.coordinates) return null;
+    const [lng, lat] = m.location.coordinates;
+    const latF = parseFloat(lat);
+    const lngF = parseFloat(lng);
+    if (isNaN(latF) || isNaN(lngF)) return null;
+    return { lat: latF, lng: lngF, label: m.machine_type };
+  };
+
+  // ── Loading guard ─────────────────────────────────────────────────────────
+  if (loading) {
+    return <div className="flex items-center justify-center h-full"><div className="text-muted-foreground">Loading...</div></div>;
+  }
+
+  // ── Partition records ─────────────────────────────────────────────────────
+  const jobOffers = isMechanic ? records.filter(r => r.status === 'pending_acceptance') : [];
+  const activeJobs = isMechanic ? records.filter(r => r.status === 'in_progress') : [];
+
+  // ── Available machines only ───────────────────────────────────────────────
+  const availableMachinery = machinery.filter(m => {
+    const s = (m.status || '').toLowerCase();
+    return s === 'available' || s === 'active';
+  });
+
+  return (
+    <div className="space-y-6">
+      {/* ── Header ── */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-4xl font-bold font-heading text-foreground tracking-tight flex items-center">
+            <Wrench className="h-10 w-10 mr-3 text-primary" />
+            {isMechanic ? 'My Job Board' : 'Maintenance Log'}
+          </h1>
+          <p className="mt-1 text-muted-foreground">
+            {isMechanic ? 'View job offers, accept or reject, and mark work complete' : 'Track machine maintenance and assign mechanics'}
+          </p>
+        </div>
+        {isOrgAdmin && (
+          <Button onClick={() => setDialogOpen(true)}>
+            <Plus className="h-4 w-4 mr-2" /> New Maintenance
+          </Button>
+        )}
+      </div>
+
+      {/* ── Mechanic: Job Offers ── */}
+      {isMechanic && jobOffers.length > 0 && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
+          <h2 className="text-lg font-semibold text-indigo-800 mb-3">🔔 New Job Offers ({jobOffers.length})</h2>
+          <div className="space-y-3">
+            {jobOffers.map(job => (
+              <div key={job.maintenance_id} className="bg-white rounded-lg border border-indigo-200 p-4 flex items-center justify-between">
+                <div>
+                  <p className="font-semibold text-foreground">{job.machine_type || job.machinery_id}</p>
+                  <p className="text-sm text-muted-foreground">{job.service_type} · {job.maintenance_id}</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => handleAcceptJob(job.maintenance_id)}>
+                    <CheckCircle className="h-4 w-4 mr-1" /> Accept
+                  </Button>
+                  <Button size="sm" variant="outline" className="border-red-300 text-red-600 hover:bg-red-50" onClick={() => handleRejectJob(job.maintenance_id)}>
+                    <XCircle className="h-4 w-4 mr-1" /> Reject
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Mechanic: Active Jobs ── */}
+      {isMechanic && activeJobs.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+          <h2 className="text-lg font-semibold text-blue-800 mb-3">🔧 Active Jobs ({activeJobs.length})</h2>
+          <div className="space-y-3">
+            {activeJobs.map(job => (
+              <div key={job.maintenance_id} className="bg-white rounded-lg border border-blue-200 p-4 flex items-center justify-between">
+                <div>
+                  <p className="font-semibold text-foreground">{job.machine_type || job.machinery_id}</p>
+                  <p className="text-sm text-muted-foreground">{job.service_type} · {job.maintenance_id}</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => handleCompleteJob(job.maintenance_id)}>
+                    <CheckCircle className="h-4 w-4 mr-1" /> Mark Complete
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => { setMaterialData({ ...materialData, maintenance_id: job.maintenance_id }); setMaterialDialogOpen(true); }}>
+                    Request Parts
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── All Records Table ── */}
+      <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
+        <div className="px-6 py-4 border-b border-border">
+          <h2 className="text-lg font-semibold text-foreground">
+            {isMechanic ? 'All My Jobs' : 'All Maintenance Records'}
+          </h2>
+        </div>
+        {records.length === 0 ? (
+          <div className="p-12 text-center text-muted-foreground">No maintenance records found.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-muted/40 border-b border-border">
+                <tr>
+                  {['ID', 'Machine', 'Service', 'Mechanic', 'Status', 'Cost', 'Rating', 'Actions'].map(h => (
+                    <th key={h} className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {records.map(record => {
+                  const isPendingAssignment = record.status === 'pending_assignment';
+                  const isCompleted = record.status === 'completed' || !!record.completed_at;
+                  const isRated = !!record.rating;
+                  return (
+                    <tr key={record.maintenance_id}
+                      className={`table-row ${isPendingAssignment ? 'bg-yellow-50/50' : ''}`}
+                      data-testid={`maintenance-row-${record.maintenance_id}`}
+                    >
+                      <td className="px-6 py-4 text-xs font-mono text-muted-foreground">{record.maintenance_id}</td>
+                      <td className="px-6 py-4 text-sm font-medium">{record.machine_type || record.machinery_id}</td>
+                      <td className="px-6 py-4 text-sm text-muted-foreground">{record.service_type}</td>
+                      <td className="px-6 py-4 text-sm text-muted-foreground">
+                        {record.mechanic_name || (record.mechanic_id === 'unassigned' ? '—' : record.mechanic_id || '—')}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1 w-fit ${statusColor(record.status)}`}>
+                          {isPendingAssignment && <AlertTriangle className="h-3 w-3" />}
+                          {statusLabel(record.status)}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-sm font-mono">₹{(record.total_cost || 0).toLocaleString()}</td>
+                      <td className="px-6 py-4 text-sm">
+                        {isRated
+                          ? <span className="text-yellow-600 font-semibold">{'⭐'.repeat(record.rating)} {record.rating}/5</span>
+                          : <span className="text-muted-foreground text-xs">—</span>}
+                      </td>
+                      <td className="px-6 py-4 text-right space-x-1">
+                        {/* Mechanic: accept/reject */}
+                        {isMechanic && record.status === 'pending_acceptance' && (
+                          <>
+                            <Button size="sm" variant="outline" className="border-green-400 text-green-700" onClick={() => handleAcceptJob(record.maintenance_id)}>Accept</Button>
+                            <Button size="sm" variant="ghost" className="text-red-500" onClick={() => handleRejectJob(record.maintenance_id)}>Reject</Button>
+                          </>
+                        )}
+                        {/* Mechanic: complete */}
+                        {isMechanic && record.status === 'in_progress' && (
+                          <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => handleCompleteJob(record.maintenance_id)}>
+                            <CheckCircle className="h-4 w-4 mr-1" /> Complete
+                          </Button>
+                        )}
+                        {/* Mechanic: request parts */}
+                        {isMechanic && record.status === 'in_progress' && (
+                          <Button size="sm" variant="ghost" onClick={() => { setMaterialData({ ...materialData, maintenance_id: record.maintenance_id }); setMaterialDialogOpen(true); }}>
+                            Parts
+                          </Button>
+                        )}
+                        {/* Manager: assign or reassign — also shows for rejected */}
+                        {isOrgAdmin && (isPendingAssignment || record.status === 'pending' || record.status === 'rejected') && (
+                          <Button size="sm" variant="outline" onClick={() => openAssignDialog(record)}>
+                            <UserPlus className="h-4 w-4 mr-1" />
+                            {record.mechanic_id && record.mechanic_id !== 'unassigned' ? 'Reassign' : 'Assign'}
+                          </Button>
+                        )}
+                        {/* Manager: rate after completion */}
+                        {isOrgAdmin && isCompleted && !isRated && record.mechanic_id && record.mechanic_id !== 'unassigned' && (
+                          <Button size="sm" variant="outline" className="border-yellow-400 text-yellow-700 hover:bg-yellow-50" onClick={() => openRateDialog(record)}>
+                            <Star className="h-4 w-4 mr-1" /> Rate
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════════
+          DIALOGS
+      ═══════════════════════════════════════════════════════════════════════ */}
+
+      {/* ── Create Maintenance ── */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent data-testid="create-maintenance-dialog">
+          <DialogHeader><DialogTitle>New Maintenance Job</DialogTitle></DialogHeader>
+          <form onSubmit={handleCreate} className="space-y-4">
+            <div>
+              <Label>Machine *</Label>
+              <Select value={formData.machinery_id} onValueChange={(v) => setFormData({ ...formData, machinery_id: v })} required>
+                <SelectTrigger><SelectValue placeholder="Select machine" /></SelectTrigger>
+                <SelectContent>
+                  {availableMachinery.length === 0
+                    ? <SelectItem value="none" disabled>No available machines</SelectItem>
+                    : availableMachinery.map(m => (
+                      <SelectItem key={m.machinery_id} value={m.machinery_id}>{m.machine_type} ({m.machinery_id})</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Service Type *</Label>
+              <Select value={formData.service_type} onValueChange={(v) => setFormData({ ...formData, service_type: v })} required>
+                <SelectTrigger><SelectValue placeholder="Select service" /></SelectTrigger>
+                <SelectContent>
+                  {['Engine Repair', 'Oil Change', 'Tyre Replacement', 'Electrical', 'Hydraulic', 'Scheduled Service', 'Breakdown'].map(s => (
+                    <SelectItem key={s} value={s}>{s}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Assign Mechanic (optional)</Label>
+              <Select value={formData.mechanic_id} onValueChange={(v) => setFormData({ ...formData, mechanic_id: v })}>
+                <SelectTrigger><SelectValue placeholder="Select mechanic (optional)" /></SelectTrigger>
+                <SelectContent>
+                  {mechanics.length === 0
+                    ? <SelectItem value="none" disabled>No active mechanics available</SelectItem>
+                    : mechanics.map(m => (
+                      <SelectItem key={m.username} value={m.username}>
+                        {m.full_name} (@{m.username})
+                        {m.total_reviews > 0 && ` ⭐ ${m.average_rating} (${m.total_reviews})`}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+              <Button type="submit">Create</Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Assign / Reassign Mechanic (with Map) ── */}
+      <Dialog open={assignDialogOpen} onOpenChange={setAssignDialogOpen}>
+        <DialogContent className="max-w-2xl" data-testid="assign-mechanic-dialog">
+          <DialogHeader>
+            <DialogTitle>
+              <RefreshCw className="inline h-4 w-4 mr-2 text-muted-foreground" />
+              Assign Mechanic — {selectedRecord?.maintenance_id}
+            </DialogTitle>
+          </DialogHeader>
+
+          {/* Geospatial map */}
+          {(() => {
+            const machineLoc = getMachineLocation(selectedRecord);
+            // STRICT fallback: always a number, never null/NaN
+            const centerLat = machineLoc ? machineLoc.lat : 11.0168;
+            const centerLng = machineLoc ? machineLoc.lng : 76.9558;
+
+            const mechanicsWithCoords = (mechanics || []).filter(m => {
+              const lat = Number(m.lat);
+              const lng = Number(m.lng);
+              return !isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0;
+            });
+
+            return (
+              <div className="h-56 w-full rounded-lg overflow-hidden border border-border mb-4 z-0 relative">
+                <MapContainer center={[centerLat, centerLng]} zoom={12} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }}>
+                  <TileLayer
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                  />
+                  {/* 🔴 Broken machine pin */}
+                  {machineLoc && (
+                    <Marker position={[centerLat, centerLng]} icon={redIcon}>
+                      <Popup><strong>🔴 Broken Machine</strong><br />{machineLoc.label}</Popup>
+                    </Marker>
+                  )}
+                  {/* 🔵 Mechanic pins — only when coords are valid numbers */}
+                  {mechanicsWithCoords.map(m => {
+                    const lat = Number(m.lat);
+                    const lng = Number(m.lng);
+                    return (
+                      <Marker key={m.username} position={[lat, lng]} icon={blueIcon}>
+                        <Popup>
+                          <strong>🔵 {m.full_name}</strong><br />
+                          @{m.username}<br />
+                          {m.total_reviews > 0 ? `⭐ ${m.average_rating} (${m.total_reviews} reviews)` : 'No reviews yet'}
+                        </Popup>
+                      </Marker>
+                    );
+                  })}
+                </MapContainer>
+                {!machineLoc && (
+                  <div className="absolute top-2 left-2 bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded z-10">
+                    Machine location not set — showing Coimbatore city centre
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+
+
+
+          <form onSubmit={handleAssignMechanic} className="space-y-4">
+            <div>
+              <Label>Select Mechanic *</Label>
+              <Select value={assignMechanicId} onValueChange={setAssignMechanicId} required>
+                <SelectTrigger><SelectValue placeholder="Choose a mechanic" /></SelectTrigger>
+                <SelectContent>
+                  {mechanics.map(m => (
+                    <SelectItem key={m.username} value={m.username}>
+                      {m.full_name} (@{m.username})
+                      <RatingBadge avg={m.average_rating} count={m.total_reviews} />
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setAssignDialogOpen(false)}>Cancel</Button>
+              <Button type="submit" className="bg-green-600 hover:bg-green-700">Assign Mechanic</Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Rate Mechanic ── */}
+      <Dialog open={rateDialogOpen} onOpenChange={setRateDialogOpen}>
+        <DialogContent data-testid="rate-mechanic-dialog">
+          <DialogHeader>
+            <DialogTitle>
+              <Star className="inline h-4 w-4 mr-2 text-yellow-500" />
+              Rate Mechanic — {selectedRecord?.mechanic_id}
+            </DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleSubmitRating} className="space-y-4">
+            <div>
+              <p className="text-sm text-muted-foreground mb-1">Job: <span className="font-mono">{selectedRecord?.maintenance_id}</span> · {selectedRecord?.service_type}</p>
+              <Label className="mb-2 block">Your Rating *</Label>
+              <StarRating value={ratingValue} onChange={setRatingValue} size={8} />
+              {ratingValue > 0 && (
+                <p className="text-sm text-muted-foreground mt-1">
+                  {['', 'Poor', 'Below Average', 'Good', 'Very Good', 'Excellent'][ratingValue]}
+                </p>
+              )}
+            </div>
+            <div>
+              <Label>Feedback (optional)</Label>
+              <textarea
+                className="w-full border border-input rounded-md px-3 py-2 text-sm bg-background mt-1 resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+                rows={3}
+                placeholder="Share your experience with this mechanic..."
+                value={ratingFeedback}
+                onChange={(e) => setRatingFeedback(e.target.value)}
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setRateDialogOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={ratingSubmitting || ratingValue === 0} className="bg-yellow-500 hover:bg-yellow-600">
+                {ratingSubmitting ? 'Submitting...' : 'Submit Rating'}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Mechanic: Request Parts ── */}
+      <Dialog open={materialDialogOpen} onOpenChange={setMaterialDialogOpen}>
+        <DialogContent data-testid="material-request-dialog">
+          <DialogHeader><DialogTitle>Request Spare Parts</DialogTitle></DialogHeader>
+          <form onSubmit={handleMechanicPartsRequest} className="space-y-4">
+            <div>
+              <Label>Part / Item Name *</Label>
+              <Input value={materialData.item_name} onChange={(e) => setMaterialData({ ...materialData, item_name: e.target.value })} required placeholder="e.g. Oil filter, hydraulic hose" />
+            </div>
+            <div>
+              <Label>Estimated Cost (₹) *</Label>
+              <Input type="number" value={materialData.estimated_cost} onChange={(e) => setMaterialData({ ...materialData, estimated_cost: e.target.value })} required />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setMaterialDialogOpen(false)}>Cancel</Button>
+              <Button type="submit">Submit Request</Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

@@ -1,0 +1,29 @@
+.stat-card {
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.stat-card:hover {
+  border-color: rgba(15, 61, 62, 0.5);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.table-row {
+  transition: background-color 0.2s ease;
+}
+
+.table-row:hover {
+  background-color: rgba(248, 250, 252, 0.5);
+}
+
+.sidebar-link {
+  transition: all 0.2s ease;
+}
+
+.sidebar-link:hover {
+  background-color: rgba(249, 115, 22, 0.1);
+}
+
+.sidebar-link.active {
+  background-color: #0F3D3E;
+  color: white;
+}
