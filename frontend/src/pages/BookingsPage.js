@@ -50,15 +50,19 @@ export default function BookingsPage() {
     try {
       const [bookingsRes, farmersRes, machineryRes, employeesRes] = await Promise.all([
         api.get('/bookings'),
-        api.get('/farmers'),
+        api.get('/org/farmers/all'),
         api.get('/machinery'),
         api.get('/employees')
       ]);
       setBookings(bookingsRes.data);
-      setFarmers(farmersRes.data);
-      setMachinery(machineryRes.data.filter(m => m.status === 'Available'));
-      setAllMachinery(machineryRes.data.filter(m => m.status === 'Available'));
-      setOperators(employeesRes.data.filter(e => e.role === 'Operator'));
+      const farmersData = farmersRes.data;
+      const machineryData = machineryRes.data.filter(m => m.status?.toLowerCase() === 'available');
+      const operatorsData = employeesRes.data.filter(e => e.role?.toLowerCase() === 'operator');
+      setFarmers(farmersData);
+      setMachinery(machineryData);
+      setAllMachinery(machineryData);
+      setOperators(operatorsData);
+      console.log('DROPDOWN DATA:', { farmers: farmersData, machinery: machineryData, operators: operatorsData });
     } catch (error) {
       toast.error('Failed to load data');
     } finally {
@@ -206,7 +210,9 @@ export default function BookingsPage() {
                   </SelectTrigger>
                   <SelectContent>
                     {farmers.map((farmer) => (
-                      <SelectItem key={farmer.farmer_id} value={farmer.farmer_id}>{farmer.name}</SelectItem>
+                      <SelectItem key={farmer.username || farmer.farmer_id} value={farmer.username || farmer.farmer_id}>
+                        {farmer.full_name || farmer.name}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>

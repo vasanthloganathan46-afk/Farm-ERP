@@ -8,11 +8,36 @@
   * {
     @apply border-border;
   }
+
   body {
     @apply bg-background text-foreground;
     font-family: 'Public Sans', sans-serif;
   }
-  h1, h2, h3, h4, h5, h6 {
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
     font-family: 'Manrope', sans-serif;
+  }
+}
+
+select,
+select option {
+  background-color: #ffffff !important;
+  /* User's standard card background color */
+  color: #000000 !important;
+  /* Ensure text is visible */
+}
+
+@media (prefers-color-scheme: dark) {
+
+  select,
+  select option {
+    background-color: #1f2937 !important;
+    /* Tailwind gray-800 */
+    color: #ffffff !important;
   }
 }

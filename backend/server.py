@@ -284,6 +284,7 @@ class MaintenanceRecord(BaseModel):
     total_cost: float = 0.0
     created_at: str
     organization_id: str = "default_org"
+    spare_parts: List[dict] = []
     machine_type: Optional[str] = None
     mechanic_name: Optional[str] = None
     rating: Optional[int] = None
@@ -298,6 +299,7 @@ class MaintenanceCreate(BaseModel):
     mechanic_id: str
     service_type: str
     notes: Optional[str] = None
+    status: str = Field("pending_assignment", description="Must never be None")
 
 class MaintenanceUpdate(BaseModel):
     completed_at: Optional[str] = None
@@ -323,7 +325,8 @@ class MaterialRequest(BaseModel):
 class MaterialRequestCreate(BaseModel):
     maintenance_id: str
     part_name: str
-    estimated_cost: float
+    estimated_cost: float = Field(0.0, ge=0, description="Cost cannot be negative")
+    quantity: int = Field(default=1, gt=0, description="Must be at least 1")
 
 class MaterialRequestUpdate(BaseModel):
     status: str
@@ -340,6 +343,7 @@ class WageRecord(BaseModel):
     created_at: str
     organization_id: str = "default_org"
     employee_name: Optional[str] = None
+    employee_role: Optional[str] = None
 
 class WageCreate(BaseModel):
     employee_id: str
@@ -354,6 +358,10 @@ class FuelExpenseCreate(BaseModel):
 
 class MaintenanceAssign(BaseModel):
     mechanic_username: str
+
+class CompleteJobRequest(BaseModel):
+    labor_charge: float = 0.0
+    notes: Optional[str] = None
 
 class DashboardStats(BaseModel):
     total_revenue: float
@@ -650,6 +658,19 @@ async def get_all_mechanics(current_user: UserResponse = Depends(get_current_use
     
     mechanics = await db.employees.find({"role": "Mechanic"}, {"_id": 0}).to_list(1000)
     return mechanics
+
+@api_router.get("/org/farmers/all")
+async def get_all_active_farmers(current_user: UserResponse = Depends(get_current_user)):
+    """Fetch ALL active users where role == 'farmer', completely ignoring tenant_id."""
+    if current_user.role not in ["org_admin", "owner", "super_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
+    farmers = await db.users.find(
+        {"role": "farmer", "status": "Active"},
+        {"_id": 0, "password_hash": 0}
+    ).to_list(1000)
+    
+    return farmers
 
 @api_router.get("/org/farmers")
 async def get_org_farmers_global(current_user: UserResponse = Depends(get_current_user)):
@@ -1258,17 +1279,30 @@ async def get_employees(current_user: UserResponse = Depends(get_current_user)):
         
     query = {}
     if current_user.role in ["org_admin", "owner"]:
-        # STRICT WALLED GARDEN: only own org, exclude freelance Mechanics
         query["organization_id"] = current_user.organization_id
-        query["role"] = {"$ne": "Mechanic"}
+        query["role"] = {"$in": ["operator", "org_admin"]}
         
     elif current_user.role == "mechanic":
-        if current_user.organization_id == "default_org" or current_user.organization_id is None:
-             query["organization_id"] = "default_org"
-        else:
-             query["organization_id"] = current_user.organization_id
+        query["organization_id"] = current_user.organization_id or "default_org"
         
-    employees = await db.employees.find(query, {"_id": 0}).to_list(1000)
+    users = await db.users.find(query, {"_id": 0}).to_list(1000)
+    
+    employees = []
+    for u in users:
+        # Try to get payroll details from employees collection by matching name
+        emp_record = await db.employees.find_one({"name": u.get("full_name")}, {"_id": 0})
+        employees.append({
+            "employee_id": u.get("username"),
+            "name": u.get("full_name"),
+            "role": u.get("role"),
+            "department": emp_record.get("department") if emp_record else ("Management" if u.get("role") == "org_admin" else "Operations"),
+            "skill": emp_record.get("skill") if emp_record else "N/A",
+            "joining_date": emp_record.get("joining_date") if emp_record else datetime.now(timezone.utc).isoformat(),
+            "wage_rate": emp_record.get("wage_rate", 0.0) if emp_record else 0.0,
+            "created_at": emp_record.get("created_at") if emp_record else datetime.now(timezone.utc).isoformat(),
+            "organization_id": u.get("organization_id", "default_org")
+        })
+        
     return employees
 
 @api_router.post("/employees", response_model=Employee)
@@ -1701,6 +1735,10 @@ async def create_maintenance(maintenance: MaintenanceCreate, current_user: UserR
         maintenance_data["status"] = "pending_assignment"   # no mechanic yet
         maintenance_data["mechanic_id"] = "unassigned"
     
+    # Strictly ensure status is never None when saving
+    if not maintenance_data.get("status"):
+        maintenance_data["status"] = "pending_assignment"
+    
     # Mark machinery as under maintenance
     await db.machinery.update_one(
         {"machinery_id": maintenance.machinery_id},
@@ -1905,12 +1943,14 @@ async def update_material_request(request_id: str, update: MaterialRequestUpdate
 
 @api_router.get("/wages", response_model=List[WageRecord])
 async def get_wages(current_user: UserResponse = Depends(get_current_user)):
-    if current_user.role not in ["admin", "owner", "org_admin"]:
+    if current_user.role not in ["admin", "owner", "org_admin", "mechanic"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     
     query = {}
     if current_user.role in ["org_admin", "owner"]:
         query["organization_id"] = current_user.organization_id
+    elif current_user.role == "mechanic":
+        query["employee_id"] = current_user.username
 
     wages = await db.wages.find(query, {"_id": 0}).to_list(1000)
     
@@ -1918,6 +1958,10 @@ async def get_wages(current_user: UserResponse = Depends(get_current_user)):
         employee = await db.employees.find_one({"employee_id": wage["employee_id"]}, {"_id": 0})
         if employee:
             wage["employee_name"] = employee["name"]
+        else:
+            user = await db.users.find_one({"username": wage["employee_id"]}, {"_id": 0})
+            if user:
+                wage["employee_name"] = user.get("full_name")
     
     return wages
 
@@ -1950,11 +1994,7 @@ async def pay_operator(wage_id: str, current_user: UserResponse = Depends(get_cu
     if not wage_record:
         raise HTTPException(status_code=404, detail="Wage record not found")
 
-    # Verify the booking belongs to this org
-    booking = await db.bookings.find_one(
-        {"booking_id": wage_record.get("booking_id"), "organization_id": current_user.organization_id}, {"_id": 0}
-    )
-    if not booking:
+    if wage_record.get("organization_id") != current_user.organization_id:
         raise HTTPException(status_code=403, detail="Access denied — wage does not belong to your organisation")
 
     # Guard: already paid?
@@ -1973,30 +2013,33 @@ async def pay_operator(wage_id: str, current_user: UserResponse = Depends(get_cu
         "paid_at": paid_at
     }
 
-@api_router.put("/org/pay-mechanic/{maintenance_id}")
-
-async def pay_mechanic(maintenance_id: str, current_user: UserResponse = Depends(get_current_user)):
-    """Mark a mechanic's maintenance job as wage-paid."""
+@api_router.put("/org/pay-mechanic/{wage_id}")
+async def pay_mechanic(wage_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Mark a mechanic's wage record as paid strictly by its wage_id."""
     if current_user.role not in ["org_admin"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    maintenance = await db.maintenance.find_one(
-        {"maintenance_id": maintenance_id, "organization_id": current_user.organization_id}, {"_id": 0}
+    # 1. Strictly query by wage_id and tenant
+    wage_record = await db.wages.find_one(
+        {"wage_id": wage_id, "organization_id": current_user.organization_id}, {"_id": 0}
     )
-    if not maintenance:
-        raise HTTPException(status_code=404, detail="Maintenance record not found or access denied")
+    if not wage_record:
+        raise HTTPException(status_code=404, detail="Wage record not found or access denied")
     
-    if maintenance.get("payment_status") == "paid":
-        raise HTTPException(status_code=400, detail="Mechanic for this job has already been paid")
+    if wage_record.get("payment_status") == "paid":
+        raise HTTPException(status_code=400, detail="This mechanic wage has already been paid")
     
     paid_at = datetime.now(timezone.utc).isoformat()
-    await db.maintenance.update_one(
-        {"maintenance_id": maintenance_id},
-        {"$set": {"payment_status": "paid", "mechanic_paid_at": paid_at}}
+    
+    # 2. Update the Wage Document exclusively
+    await db.wages.update_one(
+        {"wage_id": wage_id},
+        {"$set": {"payment_status": "paid", "paid_at": paid_at}}
     )
     
     return {
-        "message": f"Mechanic payment for maintenance {maintenance_id} recorded",
+        "message": f"Mechanic wage {wage_id} marked as paid",
+        "wage_id": wage_id,
         "paid_at": paid_at
     }
 
@@ -2014,7 +2057,7 @@ async def assign_mechanic(maintenance_id: str, body: MaintenanceAssign, current_
     if not record:
         raise HTTPException(status_code=404, detail="Maintenance record not found or access denied")
     
-    if record.get("status") not in ["pending_assignment", "pending"]:
+    if record.get("status") not in ["pending_assignment", "pending", None]:
         raise HTTPException(status_code=400, detail=f"Cannot assign mechanic to a job with status '{record.get('status')}'. Only pending_assignment jobs can be assigned.")
     
     # Validate mechanic exists and is active
@@ -2064,7 +2107,7 @@ async def seed_mechanic_locations(current_user: UserResponse = Depends(get_curre
 # ============ MECHANIC COMPLETE & REVIEW ============
 
 @api_router.put("/maintenance/{maintenance_id}/complete")
-async def complete_maintenance_job(maintenance_id: str, current_user: UserResponse = Depends(get_current_user)):
+async def complete_maintenance_job(maintenance_id: str, body: CompleteJobRequest = CompleteJobRequest(), current_user: UserResponse = Depends(get_current_user)):
     """
     Mechanic marks their accepted (in_progress) job as completed.
     Optionally records labor_cost and notes.
@@ -2085,6 +2128,26 @@ async def complete_maintenance_job(maintenance_id: str, current_user: UserRespon
         {"maintenance_id": maintenance_id},
         {"$set": {"status": "completed", "completed_at": now}}
     )
+    # Persist labor_charge to maintenance record before generating wage
+    labor_charge = body.labor_charge if body.labor_charge > 0 else record.get("labor_cost", 0.0)
+    await db.maintenance.update_one(
+        {"maintenance_id": maintenance_id},
+        {"$set": {"labor_cost": labor_charge, "total_cost": labor_charge + record.get("spare_parts_cost", 0.0)}}
+    )
+    # Generate wage record for mechanic
+    wage_data = {
+        "wage_id": generate_id("WAG"),
+        "employee_id": current_user.username,
+        "employee_role": "mechanic",           # ← role tag for payroll filtering
+        "booking_id": maintenance_id,
+        "wage_amount": labor_charge,
+        "payment_status": "pending",
+        "paid_at": None,
+        "created_at": now,
+        "organization_id": record.get("organization_id", "default_org")
+    }
+    await db.wages.insert_one(wage_data)
+
     # Free up the machinery
     await db.machinery.update_one(
         {"machinery_id": record.get("machinery_id")},
@@ -2172,7 +2235,57 @@ async def mechanic_request_parts(maintenance_id: str, request: MaterialRequestCr
         "organization_id": mnt.get("organization_id", "default_org")
     }
     await db.material_requests.insert_one(req_data)
+    
+    # Update the maintenance document with spare_parts array
+    new_part = {
+        "part_name": request.part_name,
+        "quantity": request.quantity,
+        "estimated_cost": request.estimated_cost,
+        "status": "requested",
+        "requested_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.maintenance.update_one(
+        {"maintenance_id": maintenance_id},
+        {"$push": {"spare_parts": new_part}}
+    )
+    
     return MaterialRequest(**req_data)
+
+@api_router.put("/maintenance/{maintenance_id}/spare-parts/approve")
+async def approve_spare_parts(maintenance_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Manager approves all requested spare parts for a maintenance job."""
+    if current_user.role not in ["org_admin", "owner", "super_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized to approve spare parts")
+        
+    mnt = await db.maintenance.find_one({"maintenance_id": maintenance_id})
+    if not mnt:
+         raise HTTPException(status_code=404, detail="Maintenance record not found")
+         
+    await db.maintenance.update_one(
+        {"maintenance_id": maintenance_id},
+        {"$set": {"spare_parts.$[elem].status": "approved"}},
+        array_filters=[{"elem.status": "requested"}]
+    )
+    
+    updated = await db.maintenance.find_one({"maintenance_id": maintenance_id}, {"_id": 0})
+    return {"message": "All spare parts approved", "spare_parts": updated.get("spare_parts", [])}
+
+@api_router.put("/maintenance/{maintenance_id}/spare-parts/{part_name}/approve")
+async def approve_single_spare_part(maintenance_id: str, part_name: str, current_user: UserResponse = Depends(get_current_user)):
+    """Manager approves a single spare part by name using the positional operator."""
+    if current_user.role not in ["org_admin", "owner", "super_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized to approve spare parts")
+    
+    mnt = await db.maintenance.find_one({"maintenance_id": maintenance_id, "spare_parts.part_name": part_name})
+    if not mnt:
+        raise HTTPException(status_code=404, detail=f"Part '{part_name}' not found in maintenance record")
+
+    await db.maintenance.update_one(
+        {"maintenance_id": maintenance_id, "spare_parts.part_name": part_name},
+        {"$set": {"spare_parts.$.status": "approved"}}
+    )
+    updated = await db.maintenance.find_one({"maintenance_id": maintenance_id}, {"_id": 0})
+    return {"message": f"Part '{part_name}' approved", "spare_parts": updated.get("spare_parts", [])}
 
 # ============ FUEL EXPENSE ROUTES ============
 

@@ -91,13 +91,34 @@ export default function MaintenancePage() {
   const [ratingSubmitting, setRatingSubmitting] = useState(false);
 
   // Material request (mechanic)
-  const [materialData, setMaterialData] = useState({ maintenance_id: '', item_name: '', estimated_cost: '' });
+  const [materialData, setMaterialData] = useState({ maintenance_id: '' });
+  const [partsList, setPartsList] = useState([{ part_name: '', quantity: 1 }]);
+  const [materialError, setMaterialError] = useState(null);
+
+  // Manager parts review
+  const [reviewPartsDialogOpen, setReviewPartsDialogOpen] = useState(false);
+  const [reviewPartsRecord, setReviewPartsRecord] = useState(null);
+
+  // Mechanic wages
+  const [wages, setWages] = useState([]);
+
+  // Complete job dialog (to enter labor charge)
+  const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
+  const [completeJobId, setCompleteJobId] = useState(null);
+  const [laborCharge, setLaborCharge] = useState('');
 
   // ── Data fetching ─────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
     try {
       const promises = [api.get('/maintenance'), api.get('/machinery')];
       if (isOrgAdmin) promises.push(api.get('/org/mechanics/available'));
+
+      let wagesIdx = -1;
+      if (isMechanic) {
+        promises.push(api.get('/wages').catch(() => ({ data: [] })));
+        wagesIdx = promises.length - 1;
+      }
+
       const results = await Promise.all(promises);
       setRecords(results[0].data);
       setMachinery(results[1].data);
@@ -106,12 +127,15 @@ export default function MaintenancePage() {
         console.log('[MaintenancePage] available mechanics:', data);
         setMechanics(data);
       }
+      if (isMechanic && wagesIdx > -1) {
+        setWages(results[wagesIdx].data || []);
+      }
     } catch {
       toast.error('Failed to load data');
     } finally {
       setLoading(false);
     }
-  }, [isOrgAdmin]);
+  }, [isOrgAdmin, isMechanic]);
 
   useEffect(() => {
     fetchData();
@@ -161,10 +185,19 @@ export default function MaintenancePage() {
     }
   };
 
-  const handleCompleteJob = async (id) => {
+  const handleCompleteJob = (id) => {
+    setCompleteJobId(id);
+    setLaborCharge('');
+    setCompleteDialogOpen(true);
+  };
+
+  const submitCompleteJob = async () => {
     try {
-      await api.put(`/maintenance/${id}/complete`);
+      await api.put(`/maintenance/${completeJobId}/complete`, {
+        labor_charge: parseFloat(laborCharge) || 0
+      });
       toast.success('Job marked as completed ✅');
+      setCompleteDialogOpen(false);
       fetchData();
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to complete job');
@@ -223,16 +256,73 @@ export default function MaintenancePage() {
   // ── Mechanic: request spare parts ─────────────────────────────────────────
   const handleMechanicPartsRequest = async (e) => {
     e.preventDefault();
+    setMaterialError(null);
+    const validParts = partsList.filter(p => p.part_name.trim());
+    if (validParts.length === 0) { setMaterialError('Add at least one part name'); return; }
     try {
-      await api.post(`/mechanic/jobs/${materialData.maintenance_id}/parts`, {
-        part_name: materialData.item_name,
-        estimated_cost: parseFloat(materialData.estimated_cost)
-      });
-      toast.success('Spare parts request submitted!');
+      for (const part of validParts) {
+        await api.post(`/mechanic/jobs/${materialData.maintenance_id}/parts`, {
+          maintenance_id: materialData.maintenance_id,
+          part_name: part.part_name,
+          estimated_cost: parseFloat(part.estimated_cost) || 0
+        });
+      }
+      toast.success(`${validParts.length} spare part(s) requested!`);
       setMaterialDialogOpen(false);
-      setMaterialData({ maintenance_id: '', item_name: '', estimated_cost: '' });
+      setPartsList([{ part_name: '', quantity: 1, estimated_cost: '' }]);
+      setMaterialData({ maintenance_id: '' });
+      fetchData();
     } catch (error) {
-      toast.error(error.response?.data?.detail || 'Failed to submit parts request');
+      const detail = error.response?.data?.detail;
+      let errMsg = 'Failed to submit parts request';
+      if (Array.isArray(detail)) {
+        errMsg = detail.map(err => `${err.loc.join('.')}: ${err.msg}`).join(', ');
+      } else if (typeof detail === 'string') {
+        errMsg = detail;
+      }
+      setMaterialError(errMsg);
+      toast.error(errMsg);
+    }
+  };
+
+  const addPartRow = () => setPartsList(prev => [...prev, { part_name: '', quantity: 1, estimated_cost: '' }]);
+  const removePartRow = (idx) => setPartsList(prev => prev.filter((_, i) => i !== idx));
+  const updatePartRow = (idx, field, value) => setPartsList(prev => prev.map((p, i) => {
+    if (i !== idx) return p;
+    // Enforce min=1 for quantity, min=0 for cost
+    let safeVal = value;
+    if (field === 'quantity') safeVal = Math.max(1, parseInt(value) || 1);
+    if (field === 'estimated_cost') safeVal = value === '' ? '' : Math.max(0, parseFloat(value) || 0);
+    return { ...p, [field]: safeVal };
+  }));
+
+  // ── Manager: approve a single part ──────────────────────────────────
+  const handleApproveOnePart = async (part_name) => {
+    try {
+      await api.put(`/maintenance/${reviewPartsRecord.maintenance_id}/spare-parts/${encodeURIComponent(part_name)}/approve`);
+      toast.success(`'${part_name}' approved ✅`);
+      fetchData();
+      // Update local state immediately so the modal reflects the change
+      setReviewPartsRecord(prev => ({
+        ...prev,
+        spare_parts: prev.spare_parts.map(p =>
+          p.part_name === part_name ? { ...p, status: 'approved' } : p
+        )
+      }));
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to approve part');
+    }
+  };
+
+  // ── Manager: approve spare parts ──────────────────────────────────────────
+  const handleApproveParts = async () => {
+    try {
+      await api.put(`/maintenance/${reviewPartsRecord.maintenance_id}/spare-parts/approve`);
+      toast.success('Spare parts approved! ✅');
+      setReviewPartsDialogOpen(false);
+      fetchData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to approve parts');
     }
   };
 
@@ -336,15 +426,27 @@ export default function MaintenancePage() {
           <div className="space-y-3">
             {activeJobs.map(job => (
               <div key={job.maintenance_id} className="bg-white rounded-lg border border-blue-200 p-4 flex items-center justify-between">
-                <div>
+                <div className="flex-1 min-w-0">
                   <p className="font-semibold text-foreground">{job.machine_type || job.machinery_id}</p>
                   <p className="text-sm text-muted-foreground">{job.service_type} · {job.maintenance_id}</p>
+                  {job.spare_parts?.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {job.spare_parts.map((part, idx) => {
+                        const isApproved = part.status === 'approved' || part.status === 'provided';
+                        return (
+                          <span key={idx} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${isApproved ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                            {isApproved ? '✅' : '⏳'} {part.part_name} — {isApproved ? 'Provided by Admin' : 'Pending Admin Approval'}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-2">
                   <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => handleCompleteJob(job.maintenance_id)}>
                     <CheckCircle className="h-4 w-4 mr-1" /> Mark Complete
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => { setMaterialData({ ...materialData, maintenance_id: job.maintenance_id }); setMaterialDialogOpen(true); }}>
+                  <Button size="sm" variant="ghost" onClick={() => { setMaterialData({ maintenance_id: job.maintenance_id }); setPartsList([{ part_name: '', quantity: 1, estimated_cost: '' }]); setMaterialDialogOpen(true); }}>
                     Request Parts
                   </Button>
                 </div>
@@ -384,7 +486,22 @@ export default function MaintenancePage() {
                       data-testid={`maintenance-row-${record.maintenance_id}`}
                     >
                       <td className="px-6 py-4 text-xs font-mono text-muted-foreground">{record.maintenance_id}</td>
-                      <td className="px-6 py-4 text-sm font-medium">{record.machine_type || record.machinery_id}</td>
+                      <td className="px-6 py-4 text-sm font-medium">
+                        {record.machine_type || record.machinery_id}
+                        {isOrgAdmin && record.spare_parts && record.spare_parts.length > 0 && (
+                          <div className="mt-2 text-xs border border-border rounded-md bg-muted/20 p-2">
+                            <span className="font-semibold text-muted-foreground block mb-1">Spare Parts Used:</span>
+                            <ul className="space-y-1">
+                              {record.spare_parts.map((part, i) => (
+                                <li key={i} className="text-muted-foreground flex justify-between">
+                                  <span>{part.part_name} <span className="opacity-70">(Qty: {part.quantity})</span></span>
+                                  <span>₹{part.estimated_cost || 0}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </td>
                       <td className="px-6 py-4 text-sm text-muted-foreground">{record.service_type}</td>
                       <td className="px-6 py-4 text-sm text-muted-foreground">
                         {record.mechanic_name || (record.mechanic_id === 'unassigned' ? '—' : record.mechanic_id || '—')}
@@ -394,6 +511,13 @@ export default function MaintenancePage() {
                           {isPendingAssignment && <AlertTriangle className="h-3 w-3" />}
                           {statusLabel(record.status)}
                         </span>
+                        {isMechanic && isCompleted && (() => {
+                          const wage = wages.find(w => w.booking_id === record.maintenance_id);
+                          if (!wage) return null;
+                          return wage.payment_status === 'paid'
+                            ? <span className="mt-2 block px-2.5 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700 w-fit">Paid</span>
+                            : <span className="mt-2 block px-2.5 py-1 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-700 w-fit">Payment Pending</span>;
+                        })()}
                       </td>
                       <td className="px-6 py-4 text-sm font-mono">₹{(record.total_cost || 0).toLocaleString()}</td>
                       <td className="px-6 py-4 text-sm">
@@ -432,6 +556,12 @@ export default function MaintenancePage() {
                         {isOrgAdmin && isCompleted && !isRated && record.mechanic_id && record.mechanic_id !== 'unassigned' && (
                           <Button size="sm" variant="outline" className="border-yellow-400 text-yellow-700 hover:bg-yellow-50" onClick={() => openRateDialog(record)}>
                             <Star className="h-4 w-4 mr-1" /> Rate
+                          </Button>
+                        )}
+                        {/* Manager: review spare parts */}
+                        {isOrgAdmin && record.spare_parts?.some(p => p.status === 'requested') && (
+                          <Button size="sm" variant="outline" className="text-orange-600 border-orange-300 hover:bg-orange-50" onClick={() => { setReviewPartsRecord(record); setReviewPartsDialogOpen(true); }}>
+                            Review Parts
                           </Button>
                         )}
                       </td>
@@ -627,24 +757,116 @@ export default function MaintenancePage() {
         </DialogContent>
       </Dialog>
 
+      {/* ── Mechanic: Complete Job ── */}
+      <Dialog open={completeDialogOpen} onOpenChange={setCompleteDialogOpen}>
+        <DialogContent data-testid="complete-job-dialog">
+          <DialogHeader><DialogTitle>Complete Job — Enter Labor Charge</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Labor Charge (₹) *</Label>
+              <Input
+                type="number"
+                step="0.01"
+                placeholder="e.g. 1500"
+                value={laborCharge}
+                onChange={(e) => setLaborCharge(e.target.value)}
+                autoFocus
+              />
+              <p className="text-xs text-muted-foreground mt-1">This amount will be recorded as your wages for this job.</p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setCompleteDialogOpen(false)}>Cancel</Button>
+              <Button type="button" className="bg-green-600 hover:bg-green-700" onClick={submitCompleteJob}>
+                <CheckCircle className="h-4 w-4 mr-1" /> Confirm Complete
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* ── Mechanic: Request Parts ── */}
-      <Dialog open={materialDialogOpen} onOpenChange={setMaterialDialogOpen}>
-        <DialogContent data-testid="material-request-dialog">
+      <Dialog open={materialDialogOpen} onOpenChange={(open) => { setMaterialDialogOpen(open); if (!open) setMaterialError(null); }}>
+        <DialogContent data-testid="material-request-dialog" className="max-w-lg">
           <DialogHeader><DialogTitle>Request Spare Parts</DialogTitle></DialogHeader>
           <form onSubmit={handleMechanicPartsRequest} className="space-y-4">
-            <div>
-              <Label>Part / Item Name *</Label>
-              <Input value={materialData.item_name} onChange={(e) => setMaterialData({ ...materialData, item_name: e.target.value })} required placeholder="e.g. Oil filter, hydraulic hose" />
+            {materialError && (
+              <div className="p-3 bg-red-50 text-red-600 rounded-md text-sm border border-red-200">{materialError}</div>
+            )}
+            <div className="space-y-2">
+              {partsList.map((part, idx) => (
+                <div key={idx} className="flex gap-2 items-center">
+                  <Input
+                    className="flex-1"
+                    placeholder="Part name"
+                    value={part.part_name}
+                    onChange={(e) => updatePartRow(idx, 'part_name', e.target.value)}
+                    required
+                  />
+                  <Input
+                    type="number"
+                    className="w-20"
+                    placeholder="Qty"
+                    min={1}
+                    value={part.quantity}
+                    onChange={(e) => updatePartRow(idx, 'quantity', e.target.value)}
+                  />
+                  <Input
+                    type="number"
+                    className="w-28"
+                    placeholder="₹ Cost"
+                    min={0}
+                    value={part.estimated_cost}
+                    onChange={(e) => updatePartRow(idx, 'estimated_cost', e.target.value)}
+                  />
+                  {partsList.length > 1 && (
+                    <Button type="button" variant="ghost" size="sm" className="text-red-500 px-2" onClick={() => removePartRow(idx)}>✕</Button>
+                  )}
+                </div>
+              ))}
             </div>
-            <div>
-              <Label>Estimated Cost (₹) *</Label>
-              <Input type="number" value={materialData.estimated_cost} onChange={(e) => setMaterialData({ ...materialData, estimated_cost: e.target.value })} required />
-            </div>
+            <Button type="button" variant="outline" size="sm" onClick={addPartRow}>+ Add Another Part</Button>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => setMaterialDialogOpen(false)}>Cancel</Button>
               <Button type="submit">Submit Request</Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Manager: Review Parts ── */}
+      <Dialog open={reviewPartsDialogOpen} onOpenChange={setReviewPartsDialogOpen}>
+        <DialogContent data-testid="review-parts-dialog">
+          <DialogHeader><DialogTitle>Review Spare Parts</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="text-sm">Mechanic has requested the following parts:</div>
+            <ul className="space-y-2 border border-border rounded-md p-3">
+              {reviewPartsRecord?.spare_parts?.map((p, idx) => {
+                const isApproved = p.status === 'approved';
+                return (
+                  <li key={idx} className="flex justify-between items-center text-sm gap-2">
+                    <div>
+                      <span className="font-semibold">{p.part_name}</span>
+                      <span className="text-muted-foreground ml-1">(Qty: {p.quantity || 1})</span>
+                      {p.estimated_cost ? <span className="text-muted-foreground ml-2">₹{p.estimated_cost}</span> : null}
+                    </div>
+                    {isApproved ? (
+                      <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-semibold whitespace-nowrap">✅ Approved</span>
+                    ) : (
+                      <Button type="button" size="sm" className="bg-green-600 hover:bg-green-700 text-white text-xs h-7 px-2 whitespace-nowrap" onClick={() => handleApproveOnePart(p.part_name)}>
+                        Approve
+                      </Button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setReviewPartsDialogOpen(false)}>Close</Button>
+              {reviewPartsRecord?.spare_parts?.some(p => p.status !== 'approved') && (
+                <Button type="button" className="bg-green-600 hover:bg-green-700" onClick={handleApproveParts}>Approve All</Button>
+              )}
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
