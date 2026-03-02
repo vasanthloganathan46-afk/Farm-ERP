@@ -7,6 +7,7 @@ import { Label } from '../components/ui/label';
 import { toast } from 'sonner';
 import { Tractor, Clock, CheckCircle } from 'lucide-react';
 import SuspensionAppealChat from '../components/SuspensionAppealChat';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import api from '../api/axios';
 
 export default function LoginPage() {
@@ -18,6 +19,9 @@ export default function LoginPage() {
   // null | { has_open_ticket: bool, message_count: int }
   const [appealStatus, setAppealStatus] = useState(null);
   const [appealLoading, setAppealLoading] = useState(false);
+  const [inquiryOpen, setInquiryOpen] = useState(false);
+  const [inquiryData, setInquiryData] = useState({ name: '', email: '', message: '' });
+  const [inquiryLoading, setInquiryLoading] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
 
@@ -72,6 +76,21 @@ export default function LoginPage() {
       has_open_ticket: true,
       message_count: (prev?.message_count || 0) + 1,
     }));
+  };
+
+  const handleInquirySubmit = async (e) => {
+    e.preventDefault();
+    setInquiryLoading(true);
+    try {
+      await api.post('/support/guest-inquiry', inquiryData);
+      toast.success('Inquiry sent successfully. An admin will contact you soon.');
+      setInquiryOpen(false);
+      setInquiryData({ name: '', email: '', message: '' });
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to send inquiry.');
+    } finally {
+      setInquiryLoading(false);
+    }
   };
 
   return (
@@ -224,7 +243,67 @@ export default function LoginPage() {
               <span className="text-muted-foreground">Freelance mechanic? </span>
               <Link to="/mechanic-register" className="text-primary font-medium hover:underline">Register as Mechanic</Link>
             </div>
+            <div className="pt-2">
+              <span className="text-muted-foreground">Want to use our ERP? </span>
+              <button
+                type="button"
+                onClick={() => setInquiryOpen(true)}
+                className="text-primary font-medium hover:underline bg-transparent border-0 p-0"
+              >
+                Talk to Admin
+              </button>
+            </div>
           </div>
+
+          {/* Guest Inquiry Dialog */}
+          <Dialog open={inquiryOpen} onOpenChange={setInquiryOpen}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Talk to Admin</DialogTitle>
+                <DialogDescription>
+                  Send a message to our Super Admin regarding onboarding or questions.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleInquirySubmit} className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <Label htmlFor="guestName">Name</Label>
+                  <Input
+                    id="guestName"
+                    value={inquiryData.name}
+                    onChange={e => setInquiryData({ ...inquiryData, name: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="guestEmail">Email</Label>
+                  <Input
+                    id="guestEmail"
+                    type="email"
+                    value={inquiryData.email}
+                    onChange={e => setInquiryData({ ...inquiryData, email: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="guestMessage">Message</Label>
+                  <textarea
+                    id="guestMessage"
+                    className="flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    placeholder="Tell us about your organization..."
+                    value={inquiryData.message}
+                    onChange={e => setInquiryData({ ...inquiryData, message: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="pt-4 flex justify-end space-x-2">
+                  <Button type="button" variant="outline" onClick={() => setInquiryOpen(false)}>Cancel</Button>
+                  <Button type="submit" disabled={inquiryLoading}>
+                    {inquiryLoading ? 'Sending...' : 'Send Message'}
+                  </Button>
+                </div>
+              </form>
+            </DialogContent>
+          </Dialog>
 
           <div className="p-4 bg-muted/50 rounded-lg border border-border">
             <p className="text-sm font-semibold text-foreground mb-3">Demo Credentials</p>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import api from '../api/axios';
 import { Button } from '../components/ui/button';
-import { DollarSign, CheckCircle, Clock, Users, Wrench } from 'lucide-react';
+import { DollarSign, CheckCircle, Clock, Users, Wrench, PlayCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '../context/AuthContext';
 
@@ -11,6 +11,7 @@ export default function WagesPage() {
   const [loading, setLoading] = useState(true);
   const [payingWages, setPayingWages] = useState(new Set());   // tracks in-flight by wage_id
   const [payingMechanic, setPayingMechanic] = useState(new Set());
+  const [generatingPayroll, setGeneratingPayroll] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -107,6 +108,31 @@ export default function WagesPage() {
         </h1>
         <p className="mt-1 text-muted-foreground">Manage operator and mechanic payouts</p>
       </div>
+
+      {/* Run Manager Payroll Button */}
+      {(user?.role === 'owner' || user?.role === 'org_admin') && (
+        <div className="flex justify-end">
+          <Button
+            onClick={async () => {
+              setGeneratingPayroll(true);
+              try {
+                const res = await api.post('/wages/generate-managers');
+                toast.success(res.data.message, { duration: 8000 });
+                fetchData();
+              } catch (error) {
+                toast.error(error.response?.data?.detail || 'Failed to generate payroll');
+              } finally {
+                setGeneratingPayroll(false);
+              }
+            }}
+            disabled={generatingPayroll}
+            className="bg-blue-600 hover:bg-blue-700 text-white"
+          >
+            <PlayCircle className="h-4 w-4 mr-2" />
+            {generatingPayroll ? 'Generating...' : 'Run Manager Payroll (Monthly)'}
+          </Button>
+        </div>
+      )}
 
       {/* Summary Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

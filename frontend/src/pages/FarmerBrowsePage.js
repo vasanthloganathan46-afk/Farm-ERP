@@ -144,6 +144,14 @@ export default function FarmerBrowsePage() {
                 <Popup>
                   <div className="p-2">
                     <h3 className="font-bold">{machine.machine_type}</h3>
+                    {machine.company_name && (
+                      <div className="mb-1">
+                        <p className="text-xs text-primary font-medium">🏢 {machine.company_name}</p>
+                        {machine.company_rating && (
+                          <p className="text-xs text-yellow-600 font-medium">⭐️ {machine.company_rating} / 5.0</p>
+                        )}
+                      </div>
+                    )}
                     <p className="text-sm">Rate: ₹{machine.rate_per_hour}/hr</p>
                     <p className="text-xs text-muted-foreground">{machine.curr_village}</p>
                     <Button size="sm" className="mt-2 w-full" onClick={() => handleBookClick(machine)}>
@@ -168,8 +176,24 @@ export default function FarmerBrowsePage() {
           {machinery.map((machine) => (
             <div key={machine.machinery_id} className="bg-card border-l-4 border-l-primary rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow" data-testid={`machine-card-${machine.machinery_id}`}>
               <div className="bg-muted/30 px-6 py-4 border-b border-border">
-                <h3 className="font-semibold text-lg font-heading text-foreground">{machine.machine_type}</h3>
-                <p className="text-xs text-muted-foreground font-mono mt-1">{machine.machinery_id}</p>
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h3 className="font-semibold text-lg font-heading text-foreground">{machine.machine_type}</h3>
+                    <p className="text-xs text-muted-foreground font-mono mt-1">{machine.machinery_id}</p>
+                  </div>
+                  {machine.company_name && (
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="px-2 py-0.5 text-xs bg-primary/10 text-primary border border-primary/20 rounded-full font-medium">
+                        🏢 {machine.company_name}
+                      </span>
+                      {machine.company_rating && (
+                        <span className="text-xs font-semibold text-yellow-600 flex items-center bg-yellow-50 px-2 py-0.5 rounded-full border border-yellow-200">
+                          ⭐️ {machine.company_rating.toFixed(1)} / 5.0
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="p-6 space-y-4">
                 <div className="flex items-center justify-between">

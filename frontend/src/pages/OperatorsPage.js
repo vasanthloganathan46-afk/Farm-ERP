@@ -18,7 +18,10 @@ export default function OperatorsPage() {
     const [editDialogOpen, setEditDialogOpen] = useState(false);
     const [editingOperator, setEditingOperator] = useState(null);
 
-    const emptyForm = { username: '', full_name: '', email: '', phone: '', password: '' };
+    const emptyForm = {
+        username: '', full_name: '', email: '', phone: '',
+        skill: 'Intermediate', joining_date: new Date().toISOString().split('T')[0], wage_rate: ''
+    };
     const [addForm, setAddForm] = useState(emptyForm);
     const [editForm, setEditForm] = useState({ full_name: '', email: '', phone: '', status: 'Active' });
 
@@ -40,8 +43,25 @@ export default function OperatorsPage() {
     const handleAdd = async (e) => {
         e.preventDefault();
         try {
-            await api.post('/org/operators', addForm);
-            toast.success(`Operator '${addForm.username}' created`);
+            const res = await api.post('/org/operators', {
+                username: addForm.username,
+                full_name: addForm.full_name,
+                email: addForm.email,
+                phone: addForm.phone
+            });
+            await api.post('/employees', {
+                name: addForm.full_name,
+                role: "operator",
+                skill: addForm.skill,
+                joining_date: addForm.joining_date,
+                wage_rate: Number(addForm.wage_rate)
+            });
+            const data = res.data;
+            if (data.temp_password) {
+                toast.success(`Operator '${addForm.username}' created! Email failed \u2014 Please share credentials manually:\nUsername: ${addForm.username}\nPassword: ${data.temp_password}`, { duration: 20000 });
+            } else {
+                toast.success(`Operator '${addForm.username}' created! Login credentials emailed to ${addForm.email}`);
+            }
             setAddDialogOpen(false);
             setAddForm(emptyForm);
             fetchOperators();
@@ -157,16 +177,35 @@ export default function OperatorsPage() {
                                     />
                                 </div>
                                 <div>
-                                    <Label htmlFor="op-password">Password *</Label>
+                                    <Label htmlFor="skill">Skill Level *</Label>
+                                    <Select value={addForm.skill} onValueChange={(value) => setAddForm({ ...addForm, skill: value })} required>
+                                        <SelectTrigger><SelectValue placeholder="Select skill" /></SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="Beginner">Beginner</SelectItem>
+                                            <SelectItem value="Intermediate">Intermediate</SelectItem>
+                                            <SelectItem value="Expert">Expert</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div>
+                                    <Label htmlFor="joining_date">Joining Date *</Label>
                                     <Input
-                                        id="op-password"
-                                        data-testid="op-password-input"
-                                        type="password"
-                                        value={addForm.password}
-                                        onChange={(e) => setAddForm({ ...addForm, password: e.target.value })}
+                                        id="joining_date"
+                                        type="date"
+                                        value={addForm.joining_date}
+                                        onChange={(e) => setAddForm({ ...addForm, joining_date: e.target.value })}
                                         required
-                                        minLength={6}
-                                        placeholder="min. 6 characters"
+                                    />
+                                </div>
+                                <div>
+                                    <Label htmlFor="wage_rate">Hourly Wage (₹/hr) *</Label>
+                                    <Input
+                                        id="wage_rate"
+                                        type="number"
+                                        step="0.01"
+                                        value={addForm.wage_rate}
+                                        onChange={(e) => setAddForm({ ...addForm, wage_rate: e.target.value })}
+                                        required
                                     />
                                 </div>
                                 <div className="flex justify-end gap-2">
@@ -187,7 +226,7 @@ export default function OperatorsPage() {
                 </div>
             ) : (
                 <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-                    <div className="overflow-x-auto">
+                    <div className="overflow-x-auto w-full">
                         <table className="w-full">
                             <thead className="bg-muted/30 border-b border-border">
                                 <tr>

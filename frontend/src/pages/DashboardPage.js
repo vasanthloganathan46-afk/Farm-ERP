@@ -3,7 +3,7 @@ import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 import {
   DollarSign, FileText, Tractor, AlertCircle,
-  Users, UserCircle, TrendingUp, Clock, BarChart3, PieChart
+  Users, UserCircle, TrendingUp, Clock, BarChart3, PieChart, Trash2, Star
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -21,9 +21,16 @@ export default function DashboardPage() {
   const [roiData, setRoiData] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Owner Manager Creation Form
+  const [managerForm, setManagerForm] = useState({ name: '', email: '', monthly_salary: '' });
+  const [creatingManager, setCreatingManager] = useState(false);
+  const [managers, setManagers] = useState([]);
+
   useEffect(() => {
     fetchDashboardData();
-  }, []);
+    if (user?.role === 'owner') fetchManagers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.role]);
 
   const fetchDashboardData = async () => {
     try {
@@ -45,6 +52,49 @@ export default function DashboardPage() {
       toast.error('Failed to load dashboard data');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCreateManager = async (e) => {
+    e.preventDefault();
+    setCreatingManager(true);
+    try {
+      const res = await api.post('/owner/managers', { full_name: managerForm.name, email: managerForm.email, monthly_salary: parseFloat(managerForm.monthly_salary) || 0 });
+      const data = res.data;
+      if (data.temp_password) {
+        toast.success(`Manager created! Email failed — Please share these credentials manually:\nUsername: ${data.username || data.email}\nPassword: ${data.temp_password}`, { duration: 20000 });
+      } else {
+        toast.success(`Manager created! Login credentials emailed to ${data.email}`);
+      }
+      setManagerForm({ name: '', email: '', monthly_salary: '' });
+      fetchManagers();
+    } catch (error) {
+      const errDetail = error.response?.data?.detail;
+      const safeMsg = typeof errDetail === 'string' ? errDetail : Array.isArray(errDetail) ? errDetail[0]?.msg : error.message || 'Failed to create manager';
+      toast.error(safeMsg);
+    } finally {
+      setCreatingManager(false);
+    }
+  };
+
+  const fetchManagers = async () => {
+    try {
+      const res = await api.get('/admin/users');
+      const orgManagers = res.data.filter(u => u.role === 'org_admin' && u.organization_id === user?.organization_id);
+      setManagers(orgManagers);
+    } catch { /* silently fail */ }
+  };
+
+  const handleDeleteManager = async (username, fullName) => {
+    if (!window.confirm(`Are you sure you want to delete manager "${fullName}"? This action cannot be undone.`)) return;
+    try {
+      await api.delete(`/owner/managers/${username}`);
+      toast.success(`Manager '${fullName}' deleted successfully`);
+      setManagers(prev => prev.filter(m => m.username !== username));
+    } catch (error) {
+      const errDetail = error.response?.data?.detail;
+      const safeMsg = typeof errDetail === 'string' ? errDetail : Array.isArray(errDetail) ? errDetail[0]?.msg : error.message || 'Failed to delete manager';
+      toast.error(safeMsg);
     }
   };
 
@@ -98,33 +148,62 @@ export default function DashboardPage() {
       icon: UserCircle,
       color: 'text-indigo-600',
       bgColor: 'bg-indigo-50'
+    },
+    {
+      title: 'Company Rating',
+      value: `⭐️ ${stats?.average_rating?.toFixed(1) || '0.0'} / 5.0 (${stats?.total_reviews || 0} Reviews)`,
+      icon: Star,
+      color: 'text-yellow-600',
+      bgColor: 'bg-yellow-50'
     }
   ];
 
   return (
     <div className="space-y-6" data-testid="dashboard">
-      {/* Header */}
-      <div>
-        <h1 className="text-4xl font-bold font-heading text-foreground tracking-tight">Dashboard</h1>
-        <p className="mt-1 text-muted-foreground">Welcome back, {user?.full_name}</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-4xl font-bold font-heading text-foreground tracking-tight">
+            Dashboard
+          </h1>
+          <p className="mt-1 text-muted-foreground">Overview of your farm machinery operations</p>
+        </div>
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {statCards.map((stat, index) => (
-          <div
-            key={index}
-            data-testid={`stat-card-${stat.title.toLowerCase().replace(/\s+/g, '-')}`}
-            className="stat-card bg-card border border-border p-6 rounded-xl shadow-sm flex items-start justify-between"
-          >
-            <div>
-              <p className="text-sm text-muted-foreground font-medium">{stat.title}</p>
-              <p className="text-3xl font-bold font-heading mt-2">{stat.value}</p>
+          stat.title === 'Company Rating' ? (
+            <div key={index} className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm flex flex-col justify-between">
+              <h3 className="text-gray-500 text-sm font-medium mb-3">Company Rating</h3>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center w-12 h-12 bg-yellow-50 text-yellow-500 rounded-full text-2xl">
+                  ★
+                </div>
+                <div>
+                  <div className="text-2xl font-bold text-gray-800">
+                    {stats?.average_rating ? Number(stats.average_rating).toFixed(1) : "0.0"} <span className="text-lg text-gray-500 font-medium">/ 5.0</span>
+                  </div>
+                  <div className="text-sm text-gray-400 font-medium mt-0.5">
+                    {stats?.total_reviews || 0} Reviews
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className={`${stat.bgColor} ${stat.color} p-3 rounded-lg`}>
-              <stat.icon className="h-6 w-6" />
+          ) : (
+            <div
+              key={index}
+              data-testid={`stat-card-${stat.title.toLowerCase().replace(/\s+/g, '-')}`}
+              className="stat-card bg-card border border-border p-6 rounded-xl shadow-sm flex items-start justify-between"
+            >
+              <div>
+                <p className="text-sm text-muted-foreground font-medium">{stat.title}</p>
+                <p className="text-3xl font-bold font-heading mt-2">{stat.value}</p>
+              </div>
+              <div className={`${stat.bgColor} ${stat.color} p-3 rounded-lg`}>
+                <stat.icon className="h-6 w-6" />
+              </div>
             </div>
-          </div>
+          )
         ))}
       </div>
 
@@ -196,8 +275,8 @@ export default function DashboardPage() {
                       <p className="text-xs font-mono text-muted-foreground mt-1">{new Date(booking.booking_date).toLocaleDateString()}</p>
                     </div>
                     <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${booking.status === 'Completed' ? 'bg-green-100 text-green-700' :
-                        booking.status === 'Confirmed' ? 'bg-blue-100 text-blue-700' :
-                          'bg-yellow-100 text-yellow-700'
+                      booking.status === 'Confirmed' ? 'bg-blue-100 text-blue-700' :
+                        'bg-yellow-100 text-yellow-700'
                       }`}>
                       {booking.status}
                     </span>
@@ -238,6 +317,69 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Owner-Only Manager Creation Section */}
+      {user?.role === 'owner' && (
+        <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden mt-6">
+          <div className="p-6 border-b border-border bg-indigo-50/50">
+            <h3 className="text-lg font-semibold font-heading flex items-center text-indigo-900">
+              <Users className="h-5 w-5 mr-2 text-indigo-600" />
+              Managers
+            </h3>
+            <p className="text-sm text-muted-foreground mt-1">Create new Manager (Org Admin) accounts to help run your tenant operations.</p>
+          </div>
+          <div className="p-6">
+            <form onSubmit={handleCreateManager} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+              <div>
+                <label className="block text-sm font-medium mb-1">Name</label>
+                <input type="text" required value={managerForm.name} onChange={e => setManagerForm({ ...managerForm, name: e.target.value })} className="w-full p-2 border rounded-md text-sm" placeholder="Alice Smith" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Email</label>
+                <input type="email" required value={managerForm.email} onChange={e => setManagerForm({ ...managerForm, email: e.target.value })} className="w-full p-2 border rounded-md text-sm" placeholder="alice@example.com" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Monthly Salary (₹)</label>
+                <input type="number" step="0.01" min="0" value={managerForm.monthly_salary} onChange={e => setManagerForm({ ...managerForm, monthly_salary: e.target.value })} className="w-full p-2 border rounded-md text-sm" placeholder="25000" />
+              </div>
+              <div>
+                <button type="submit" disabled={creatingManager} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-md transition-colors text-sm">
+                  {creatingManager ? 'Creating...' : 'Create Manager'}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Existing Managers List */}
+          {managers.length > 0 && (
+            <div className="border-t border-border">
+              <div className="p-6">
+                <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Current Managers</h4>
+                <div className="space-y-2">
+                  {managers.map(m => (
+                    <div key={m.username} className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">{m.full_name}</p>
+                        <p className="text-xs text-muted-foreground">{m.email} · @{m.username}</p>
+                        {m.monthly_salary > 0 && (
+                          <p className="text-xs font-semibold text-blue-700 mt-0.5">₹{m.monthly_salary.toLocaleString()} / mo</p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => handleDeleteManager(m.username, m.full_name)}
+                        title="Delete Manager"
+                        className="p-1.5 text-red-500 hover:bg-red-50 rounded-md transition-colors"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

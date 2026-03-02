@@ -6,7 +6,30 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
 import { toast } from 'sonner';
-import { Plus, Edit, Trash2, Tractor, Fuel } from 'lucide-react';
+import { Plus, Edit, Trash2, Tractor, Fuel, MapPin } from 'lucide-react';
+import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+
+// FIX: React-Leaflet default marker icon bug with Webpack
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
+
+// Map click handler — drops a pin and updates lat/lng
+function LocationMarker({ formData, setFormData }) {
+  useMapEvents({
+    click(e) {
+      setFormData(prev => ({ ...prev, latitude: e.latlng.lat.toFixed(6), longitude: e.latlng.lng.toFixed(6) }));
+    },
+  });
+  return formData.latitude && formData.longitude ? (
+    <Marker position={[parseFloat(formData.latitude), parseFloat(formData.longitude)]} />
+  ) : null;
+}
 
 export default function MachineryPage() {
   const { user } = useAuth();
@@ -22,7 +45,9 @@ export default function MachineryPage() {
   const [formData, setFormData] = useState({
     machine_type: '',
     rate_per_hour: '',
-    rate_per_acre: ''
+    rate_per_acre: '',
+    latitude: '',
+    longitude: ''
   });
 
   useEffect(() => {
@@ -43,18 +68,27 @@ export default function MachineryPage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
+      const payload = {
+        machine_type: formData.machine_type,
+        rate_per_hour: parseFloat(formData.rate_per_hour),
+        rate_per_acre: parseFloat(formData.rate_per_acre),
+      };
+      if (formData.latitude && formData.longitude) {
+        payload.latitude = parseFloat(formData.latitude);
+        payload.longitude = parseFloat(formData.longitude);
+      }
       if (editingMachine) {
-        await api.put(`/machinery/${editingMachine.machinery_id}`, formData);
+        await api.put(`/machinery/${editingMachine.machinery_id}`, payload);
         toast.success('Machinery updated successfully');
       } else {
-        await api.post('/machinery', formData);
+        await api.post('/machinery', payload);
         toast.success('Machinery created successfully');
       }
       setDialogOpen(false);
       resetForm();
       fetchMachinery();
     } catch (error) {
-      toast.error('Failed to save machinery');
+      toast.error(error.response?.data?.detail || 'Failed to save machinery');
     }
   };
 
@@ -80,8 +114,24 @@ export default function MachineryPage() {
   };
 
   const resetForm = () => {
-    setFormData({ machine_type: '', rate_per_hour: '', rate_per_acre: '' });
+    setFormData({ machine_type: '', rate_per_hour: '', rate_per_acre: '', latitude: '', longitude: '' });
     setEditingMachine(null);
+  };
+
+  const handleGetLocation = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setFormData(prev => ({ ...prev, latitude: position.coords.latitude.toFixed(6), longitude: position.coords.longitude.toFixed(6) }));
+          toast.success('Location captured!');
+        },
+        (error) => {
+          toast.error('Could not fetch location. Please enter manually.');
+        }
+      );
+    } else {
+      toast.error('Geolocation is not supported by this browser.');
+    }
   };
 
   const openFuelDialog = (machine) => {
@@ -179,6 +229,55 @@ export default function MachineryPage() {
                   onChange={(e) => setFormData({ ...formData, rate_per_acre: e.target.value })}
                   required
                 />
+              </div>
+              <div className="border-t border-border pt-3 mt-1">
+                <div className="flex items-center justify-between mb-2">
+                  <Label className="text-sm font-semibold flex items-center"><MapPin className="h-4 w-4 mr-1 text-primary" /> Pinpoint Machine Location</Label>
+                  <Button type="button" variant="outline" size="sm" onClick={handleGetLocation}>
+                    📍 Use My Location
+                  </Button>
+                </div>
+                <div className="h-64 w-full rounded-md border border-gray-300 overflow-hidden mb-2 relative" style={{ zIndex: 0 }}>
+                  <MapContainer
+                    center={[formData.latitude ? parseFloat(formData.latitude) : 11.0168, formData.longitude ? parseFloat(formData.longitude) : 76.9558]}
+                    zoom={10}
+                    scrollWheelZoom={true}
+                    style={{ height: '100%', width: '100%' }}
+                  >
+                    <TileLayer
+                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    />
+                    <LocationMarker formData={formData} setFormData={setFormData} />
+                  </MapContainer>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label htmlFor="latitude">Latitude</Label>
+                    <Input
+                      id="latitude"
+                      type="number"
+                      step="0.000001"
+                      readOnly
+                      placeholder="Click map to set"
+                      value={formData.latitude}
+                      className="bg-gray-50"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="longitude">Longitude</Label>
+                    <Input
+                      id="longitude"
+                      type="number"
+                      step="0.000001"
+                      readOnly
+                      placeholder="Click map to set"
+                      value={formData.longitude}
+                      className="bg-gray-50"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">Click anywhere on the map to drop a pin and set the exact location.</p>
               </div>
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>

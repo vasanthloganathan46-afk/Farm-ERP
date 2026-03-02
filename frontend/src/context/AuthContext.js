@@ -12,6 +12,14 @@ export const AuthProvider = ({ children }) => {
     const savedUser = localStorage.getItem('user');
     if (token && savedUser) {
       setUser(JSON.parse(savedUser));
+
+      // Fetch the current user profile context from the specific URL
+      api.get('/auth/me')
+        .then(res => {
+          setUser(res.data);
+          localStorage.setItem('user', JSON.stringify(res.data));
+        })
+        .catch(err => console.error('Failed to fetch user profile:', err));
     }
     setLoading(false);
   }, []);

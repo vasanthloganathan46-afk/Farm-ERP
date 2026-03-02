@@ -1,11 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import api from '../api/axios';
-import { FileText, Clock, CheckCircle, XCircle } from 'lucide-react';
+import { FileText, Clock, CheckCircle, XCircle, Star } from 'lucide-react';
 import { toast } from 'sonner';
+import { Button } from '../components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '../components/ui/dialog';
+import { Textarea } from '../components/ui/textarea';
 
 export default function FarmerBookingsPage() {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Rating state
+  const [ratingModalOpen, setRatingModalOpen] = useState(false);
+  const [selectedBookingForRating, setSelectedBookingForRating] = useState(null);
+  const [ratingValue, setRatingValue] = useState(5);
+  const [reviewText, setReviewText] = useState('');
+  const [submittingRating, setSubmittingRating] = useState(false);
 
   useEffect(() => {
     fetchBookings();
@@ -39,6 +55,34 @@ export default function FarmerBookingsPage() {
       case 'Pending': return 'bg-yellow-100 text-yellow-700';
       case 'Rejected': return 'bg-red-100 text-red-700';
       default: return 'bg-gray-100 text-gray-700';
+    }
+  };
+
+  const openRatingModal = (booking) => {
+    setSelectedBookingForRating(booking);
+    setRatingValue(5);
+    setReviewText('');
+    setRatingModalOpen(true);
+  };
+
+  const submitRating = async () => {
+    if (!selectedBookingForRating) return;
+    setSubmittingRating(true);
+    try {
+      const payload = {
+        rating: parseInt(ratingValue, 10), // FORCE INTEGER
+        review: reviewText || ""
+      };
+      await api.put(`/bookings/${selectedBookingForRating.booking_id}/rate`, payload);
+      toast.success('Rating submitted successfully!');
+      setRatingModalOpen(false);
+      fetchBookings(); // Refresh the list
+    } catch (error) {
+      const errDetail = error.response?.data?.detail;
+      const safeMsg = typeof errDetail === 'string' ? errDetail : Array.isArray(errDetail) ? errDetail[0]?.msg : error.message || 'Failed to submit rating';
+      toast.error(safeMsg);
+    } finally {
+      setSubmittingRating(false);
     }
   };
 
@@ -89,7 +133,13 @@ export default function FarmerBookingsPage() {
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Operator</p>
-                  <p className="text-sm font-medium text-foreground mt-1">{booking.operator_name || 'To be assigned'}</p>
+                  <p className="text-sm font-medium text-foreground mt-1">
+                    {booking.operator_name ? (
+                      <span className="text-gray-900 font-medium bg-gray-100 px-2 py-1 rounded">{booking.operator_name}</span>
+                    ) : (
+                      <span className="text-gray-400 italic">Yet to be assigned</span>
+                    )}
+                  </p>
                 </div>
                 {booking.expected_hours && (
                   <div>
@@ -116,10 +166,83 @@ export default function FarmerBookingsPage() {
                   </div>
                 </div>
               )}
+
+              {/* Rating Button Section */}
+              {booking.status === 'Completed' && !booking.rating && (
+                <div className="px-6 py-4 bg-gray-50 border-t border-border flex justify-end">
+                  <Button
+                    onClick={() => openRatingModal(booking)}
+                    variant="default"
+                    size="sm"
+                    className="flex items-center gap-2"
+                  >
+                    <Star className="h-4 w-4" />
+                    Rate Job
+                  </Button>
+                </div>
+              )}
+              {booking.status === 'Completed' && booking.rating && (
+                <div className="px-6 py-4 bg-gray-50 border-t border-border flex items-center justify-between">
+                  <div className="text-sm font-medium text-foreground">Your Rating</div>
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <Star
+                        key={star}
+                        className={`h-4 w-4 ${star <= booking.rating ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>
       )}
+
+      {/* Rating Modal */}
+      <Dialog open={ratingModalOpen} onOpenChange={setRatingModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rate Your Experience</DialogTitle>
+          </DialogHeader>
+          <div className="py-4 space-y-4">
+            <p className="text-sm text-muted-foreground">
+              How would you rate the service for {selectedBookingForRating?.machine_type}?
+            </p>
+            <div className="flex justify-center gap-2">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  type="button"
+                  onClick={() => setRatingValue(star)}
+                  className="focus:outline-none"
+                >
+                  <Star
+                    className={`h-8 w-8 transition-colors ${star <= ratingValue ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300 hover:text-yellow-200'
+                      }`}
+                  />
+                </button>
+              ))}
+            </div>
+            <div className="space-y-2 mt-4">
+              <label className="text-sm font-medium text-foreground">Review (Optional)</label>
+              <Textarea
+                placeholder="Share your experience (optional)"
+                value={reviewText}
+                onChange={(e) => setReviewText(e.target.value)}
+                className="w-full"
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRatingModalOpen(false)}>Cancel</Button>
+            <Button onClick={submitRating} disabled={submittingRating}>
+              {submittingRating ? 'Submitting...' : 'Submit Rating'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

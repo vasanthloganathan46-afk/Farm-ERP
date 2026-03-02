@@ -61,9 +61,9 @@ export default function EmployeesPage() {
   const handleDelete = async (employeeId) => {
     if (!window.confirm('Are you sure you want to delete this employee?')) return;
     try {
-      await api.delete(`/employees/${employeeId}`);
+      await api.delete(`/org/employees/${employeeId}`);
       toast.success('Employee deleted successfully');
-      fetchEmployees();
+      setEmployees(prev => prev.filter(e => e.employee_id !== employeeId && e._id !== employeeId && e.id !== employeeId));
     } catch (error) {
       toast.error('Failed to delete employee');
     }
@@ -108,98 +108,6 @@ export default function EmployeesPage() {
           </h1>
           <p className="mt-1 text-muted-foreground">Manage employee master data</p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) resetForm(); }}>
-          {!isReadOnly && (
-            <DialogTrigger asChild>
-              <Button data-testid="add-employee-button">
-                <Plus className="h-4 w-4 mr-2" />
-                Add Employee
-              </Button>
-            </DialogTrigger>
-          )}
-          <DialogContent className="max-w-md" data-testid="employee-dialog">
-            <DialogHeader>
-              <DialogTitle>{editingEmployee ? 'Edit Employee' : 'Add New Employee'}</DialogTitle>
-            </DialogHeader>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <Label htmlFor="name">Name *</Label>
-                <Input
-                  id="name"
-                  data-testid="employee-name-input"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  required
-                />
-              </div>
-              <div>
-                <Label htmlFor="role">Role *</Label>
-                <Select value={formData.role} onValueChange={(value) => setFormData({ ...formData, role: value })} required>
-                  <SelectTrigger data-testid="employee-role-select">
-                    <SelectValue placeholder="Select role" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Operator">Operator</SelectItem>
-                    <SelectItem value="Admin">Admin</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label htmlFor="department">Department *</Label>
-                <Select value={formData.department} onValueChange={(value) => setFormData({ ...formData, department: value })} required>
-                  <SelectTrigger data-testid="employee-dept-select">
-                    <SelectValue placeholder="Select department" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Field Operations">Field Operations</SelectItem>
-                    <SelectItem value="Maintenance">Maintenance</SelectItem>
-                    <SelectItem value="Administration">Administration</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label htmlFor="skill">Skill Level *</Label>
-                <Select value={formData.skill} onValueChange={(value) => setFormData({ ...formData, skill: value })} required>
-                  <SelectTrigger data-testid="employee-skill-select">
-                    <SelectValue placeholder="Select skill" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Beginner">Beginner</SelectItem>
-                    <SelectItem value="Intermediate">Intermediate</SelectItem>
-                    <SelectItem value="Expert">Expert</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label htmlFor="joining_date">Joining Date *</Label>
-                <Input
-                  id="joining_date"
-                  data-testid="employee-date-input"
-                  type="date"
-                  value={formData.joining_date}
-                  onChange={(e) => setFormData({ ...formData, joining_date: e.target.value })}
-                  required
-                />
-              </div>
-              <div>
-                <Label htmlFor="wage_rate">Wage Rate (₹/job) *</Label>
-                <Input
-                  id="wage_rate"
-                  data-testid="employee-wage-input"
-                  type="number"
-                  step="0.01"
-                  value={formData.wage_rate}
-                  onChange={(e) => setFormData({ ...formData, wage_rate: e.target.value })}
-                  required
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-                <Button type="submit" data-testid="employee-submit-button">{editingEmployee ? 'Update' : 'Create'}</Button>
-              </div>
-            </form>
-          </DialogContent>
-        </Dialog>
       </div>
 
       <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
@@ -224,9 +132,16 @@ export default function EmployeesPage() {
                   <td className="px-6 py-4 text-sm text-muted-foreground">{employee.role}</td>
                   <td className="px-6 py-4 text-sm text-muted-foreground">{employee.department}</td>
                   <td className="px-6 py-4 text-sm text-muted-foreground">{employee.skill}</td>
-                  <td className="px-6 py-4 text-sm font-mono text-muted-foreground">₹{employee.wage_rate}</td>
+                  <td className="px-6 py-4 text-sm font-mono text-muted-foreground">
+                    {employee.role === 'org_admin' ? (
+                      <span className="font-bold text-blue-700">₹{employee.monthly_salary || employee.wage_rate || 0} / mo</span>
+                    ) : employee.role === 'operator' ? (
+                      <span className="font-semibold text-green-700">₹{employee.hourly_wage || employee.wage_rate || 0} / hr</span>
+                    ) : (
+                      <span>₹{employee.wage_rate || 0}</span>
+                    )}
+                  </td>
                   <td className="px-6 py-4 text-sm text-right">
-
                     {!isReadOnly && (
                       <>
                         <Button
@@ -246,6 +161,14 @@ export default function EmployeesPage() {
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
                       </>
+                    )}
+                    {user?.role === 'owner' && (
+                      <button
+                        onClick={() => handleDelete(employee.employee_id)}
+                        className="text-red-600 hover:text-red-800 font-semibold"
+                      >
+                        Delete
+                      </button>
                     )}
                   </td>
                 </tr>

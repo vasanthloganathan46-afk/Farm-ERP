@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import api from '../api/axios';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { BarChart3, TrendingUp, Wrench, DollarSign, Fuel, TrendingDown } from 'lucide-react';
+import { BarChart3, TrendingUp, Wrench, DollarSign, Fuel, TrendingDown, Download, Calendar, Search } from 'lucide-react';
 import { toast } from 'sonner';
 
 const COLORS = ['#0F3D3E', '#F97316', '#10B981', '#3B82F6', '#F59E0B', '#8B5CF6'];
 
 export default function ReportsPage() {
+  // ── Existing report state ────────────────────────────────────────
   const [revenueReport, setRevenueReport] = useState(null);
   const [utilization, setUtilization] = useState([]);
   const [maintenanceReport, setMaintenanceReport] = useState(null);
@@ -15,6 +16,19 @@ export default function ReportsPage() {
   const [dailyRevenue, setDailyRevenue] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // ── NEW: Date-filtered BI state ──────────────────────────────────
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [financialData, setFinancialData] = useState(null);
+  const [utilizationData, setUtilizationData] = useState([]);
+  const [biLoading, setBiLoading] = useState(false);
+
+  // ── Detail report state ──────────────────────────────────────────
+  const [selectedDetailType, setSelectedDetailType] = useState('revenue');
+  const [detailData, setDetailData] = useState([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  // ── Load existing reports on mount ───────────────────────────────
   useEffect(() => {
     fetchReports();
   }, []);
@@ -54,6 +68,128 @@ export default function ReportsPage() {
     }
   };
 
+  // ── NEW: Fetch date-filtered BI reports ──────────────────────────
+  const fetchBIReports = async () => {
+    if (!startDate || !endDate) {
+      toast.error('Please select both a start and end date');
+      return;
+    }
+    if (startDate > endDate) {
+      toast.error('Start date cannot be after end date');
+      return;
+    }
+    setBiLoading(true);
+    try {
+      const params = { start_date: startDate, end_date: endDate };
+      const [financialRes, utilDetailRes] = await Promise.all([
+        api.get('/reports/financial', { params }),
+        api.get('/reports/utilization-detail', { params }),
+      ]);
+      setFinancialData(financialRes.data);
+      setUtilizationData(utilDetailRes.data);
+      toast.success('Report generated successfully');
+    } catch (error) {
+      const errDetail = error.response?.data?.detail;
+      const safeMsg = typeof errDetail === 'string' ? errDetail : Array.isArray(errDetail) ? errDetail[0]?.msg : error.message || 'Failed to generate report';
+      toast.error(safeMsg);
+    } finally {
+      setBiLoading(false);
+    }
+  };
+
+  // ── NEW: Export to CSV ───────────────────────────────────────────
+  const exportToCSV = () => {
+    if (!financialData && utilizationData.length === 0) {
+      toast.error('Generate a report first before exporting');
+      return;
+    }
+
+    console.log('CSV RAW DATA:', utilizationData);
+
+    const rows = [];
+
+    // Financial summary header
+    rows.push(['=== FINANCIAL SUMMARY ===']);
+    rows.push(['Metric', 'Amount (INR)']);
+    if (financialData) {
+      rows.push(['Total Revenue', financialData.total_revenue ?? 0]);
+      rows.push(['Maintenance Costs', financialData.total_maintenance_costs ?? 0]);
+      rows.push(['Wages Paid', financialData.total_wages_paid ?? 0]);
+      rows.push(['Net Profit', financialData.net_profit ?? 0]);
+    }
+    rows.push([]);
+
+    // Fleet utilization header
+    rows.push(['=== FLEET UTILIZATION ===']);
+    rows.push(['Machine Name', 'Machine ID', 'Total Jobs', 'Revenue (INR)']);
+    utilizationData.forEach(item => {
+      rows.push([
+        item.machine_name || 'Unknown',
+        item.machinery_id || 'N/A',
+        item.total_jobs ?? 0,
+        item.total_revenue ?? 0
+      ]);
+    });
+
+    // Build CSV string
+    const csvContent = rows.map(row => row.map(cell => `"${cell ?? ''}"`).join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `agrigear_report_${startDate}_to_${endDate}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    toast.success('CSV exported successfully');
+  };
+
+  // ── Fetch detail report data ──────────────────────────────────────
+  const fetchDetailReport = async (type) => {
+    setDetailLoading(true);
+    try {
+      const res = await api.get(`/dashboard/reports/${type}`);
+      setDetailData(res.data);
+    } catch {
+      setDetailData([]);
+      toast.error('Failed to load detail report');
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const handleDetailTypeChange = (type) => {
+    setSelectedDetailType(type);
+    fetchDetailReport(type);
+  };
+
+  // ── Detail CSV Export ─────────────────────────────────────────────
+  const exportDetailCSV = () => {
+    if (!detailData || detailData.length === 0) return;
+    const keys = Object.keys(detailData[0]).filter(k => k !== '_id' && k !== 'tenant_id');
+    const csvContent = [
+      keys.join(','),
+      ...detailData.map(row => keys.map(k => {
+        let val = row[k];
+        if (k.includes('date') && val) {
+          try { val = new Date(val).toLocaleDateString('en-IN'); } catch { }
+        }
+        return `"${String(val ?? '').replace(/"/g, '""')}"`;
+      }).join(','))
+    ].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${selectedDetailType}_report.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    toast.success('CSV exported!');
+  };
+
+  // ── Loading state ───────────────────────────────────────────────
   if (loading) {
     return <div className="flex items-center justify-center h-full"><div className="text-muted-foreground">Loading reports...</div></div>;
   }
@@ -76,10 +212,205 @@ export default function ReportsPage() {
           <BarChart3 className="h-10 w-10 mr-3 text-primary" />
           Reports & Analytics
         </h1>
-        <p className="mt-1 text-muted-foreground">View business insights and performance metrics</p>
+        <p className="mt-1 text-muted-foreground">View business insights, performance metrics, and generate custom reports</p>
       </div>
 
-      {/* Summary Stats */}
+      {/* ══════════ NEW: Date Controls & Generate ══════════ */}
+      <div className="bg-card border border-border rounded-xl shadow-sm p-6">
+        <h3 className="text-lg font-semibold font-heading mb-4 flex items-center gap-2">
+          <Calendar className="h-5 w-5 text-primary" />
+          Custom Report Generator
+        </h3>
+        <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">Start Date</label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={e => setStartDate(e.target.value)}
+              className="px-3 py-2 rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">End Date</label>
+            <input
+              type="date"
+              value={endDate}
+              onChange={e => setEndDate(e.target.value)}
+              className="px-3 py-2 rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+          <button
+            onClick={fetchBIReports}
+            disabled={biLoading}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-white font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            <Search className="h-4 w-4" />
+            {biLoading ? 'Generating…' : 'Generate Report'}
+          </button>
+          <button
+            onClick={exportToCSV}
+            disabled={!financialData && utilizationData.length === 0}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-lg border border-border bg-card text-foreground font-semibold hover:bg-muted/50 transition-colors disabled:opacity-40"
+          >
+            <Download className="h-4 w-4" />
+            📥 Export to CSV
+          </button>
+        </div>
+      </div>
+
+      {/* ══════════ NEW: Financial Summary ══════════ */}
+      {financialData && (
+        <div className="bg-card border border-border rounded-xl shadow-sm p-6">
+          <h3 className="text-lg font-semibold font-heading mb-4 flex items-center gap-2">
+            <DollarSign className="h-5 w-5 text-green-600" />
+            Financial Summary
+            <span className="ml-2 text-xs font-normal text-muted-foreground">({startDate} → {endDate})</span>
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {/* Revenue */}
+            <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-green-50 to-emerald-100 border border-green-200 p-6">
+              <div className="absolute top-3 right-3 bg-green-200 text-green-700 p-2 rounded-lg opacity-60">
+                <TrendingUp className="h-6 w-6" />
+              </div>
+              <p className="text-sm text-green-700 font-medium">Total Revenue</p>
+              <p className="text-3xl font-bold font-mono text-green-800 mt-2">₹{financialData.total_revenue?.toLocaleString()}</p>
+            </div>
+
+            {/* Maintenance Costs */}
+            <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-red-50 to-rose-100 border border-red-200 p-6">
+              <div className="absolute top-3 right-3 bg-red-200 text-red-700 p-2 rounded-lg opacity-60">
+                <Wrench className="h-6 w-6" />
+              </div>
+              <p className="text-sm text-red-700 font-medium">Maintenance Costs</p>
+              <p className="text-3xl font-bold font-mono text-red-800 mt-2">₹{financialData.total_maintenance_costs?.toLocaleString()}</p>
+            </div>
+
+            {/* Wages Paid */}
+            <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-purple-50 to-violet-100 border border-purple-200 p-6">
+              <div className="absolute top-3 right-3 bg-purple-200 text-purple-700 p-2 rounded-lg opacity-60">
+                <DollarSign className="h-6 w-6" />
+              </div>
+              <p className="text-sm text-purple-700 font-medium">Wages Paid</p>
+              <p className="text-3xl font-bold font-mono text-purple-800 mt-2">₹{financialData.total_wages_paid?.toLocaleString()}</p>
+            </div>
+
+            {/* Net Profit */}
+            <div className={`relative overflow-hidden rounded-xl p-6 border ${financialData.net_profit >= 0
+              ? 'bg-gradient-to-br from-emerald-50 to-teal-100 border-emerald-200'
+              : 'bg-gradient-to-br from-red-50 to-rose-100 border-red-200'
+              }`}>
+              <div className={`absolute top-3 right-3 p-2 rounded-lg opacity-60 ${financialData.net_profit >= 0 ? 'bg-emerald-200 text-emerald-700' : 'bg-red-200 text-red-700'}`}>
+                {financialData.net_profit >= 0 ? <TrendingUp className="h-6 w-6" /> : <TrendingDown className="h-6 w-6" />}
+              </div>
+              <p className={`text-sm font-medium ${financialData.net_profit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>Net Profit</p>
+              <p className={`text-3xl font-bold font-mono mt-2 ${financialData.net_profit >= 0 ? 'text-emerald-800' : 'text-red-800'}`}>
+                {financialData.net_profit >= 0 ? '+' : ''}₹{financialData.net_profit?.toLocaleString()}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════ NEW: Fleet Utilization Table ══════════ */}
+      {utilizationData.length > 0 && (
+        <div className="bg-card border border-border rounded-xl shadow-sm p-6">
+          <h3 className="text-lg font-semibold font-heading mb-4 flex items-center gap-2">
+            <BarChart3 className="h-5 w-5 text-blue-600" />
+            Fleet Utilization
+            <span className="ml-2 text-xs font-normal text-muted-foreground">({startDate} → {endDate})</span>
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/30">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold">#</th>
+                  <th className="px-4 py-3 text-left font-semibold">Machine Name</th>
+                  <th className="px-4 py-3 text-left font-semibold text-muted-foreground">Machine ID</th>
+                  <th className="px-4 py-3 text-right font-semibold text-blue-700">Total Jobs</th>
+                  <th className="px-4 py-3 text-right font-semibold text-green-700">Revenue Generated</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {utilizationData.map((item, idx) => (
+                  <tr key={item.machinery_id} className="hover:bg-muted/10 transition-colors">
+                    <td className="px-4 py-3 text-muted-foreground">{idx + 1}</td>
+                    <td className="px-4 py-3 font-medium">{item.machine_name}</td>
+                    <td className="px-4 py-3 text-xs font-mono text-muted-foreground">{item.machinery_id}</td>
+                    <td className="px-4 py-3 text-right font-mono font-semibold text-blue-700">{item.total_jobs}</td>
+                    <td className="px-4 py-3 text-right font-mono font-semibold text-green-700">₹{item.total_revenue?.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════ DETAIL REPORT SECTION ══════════ */}
+      <div className="bg-card border border-border rounded-xl shadow-sm p-6">
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+          <h3 className="text-lg font-semibold font-heading flex items-center gap-2">
+            <BarChart3 className="h-5 w-5 text-primary" />
+            Detail Reports
+          </h3>
+          <div className="flex items-center gap-3">
+            <select
+              value={selectedDetailType}
+              onChange={(e) => handleDetailTypeChange(e.target.value)}
+              className="px-3 py-2 rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+            >
+              <option value="revenue">Revenue (Completed Bookings)</option>
+              <option value="diesel">Diesel / Fuel Logs</option>
+              <option value="wages">Wage Payouts</option>
+              <option value="maintenance">Maintenance & Repairs</option>
+            </select>
+            <button
+              onClick={exportDetailCSV}
+              disabled={detailData.length === 0}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-card text-foreground font-semibold hover:bg-muted/50 transition-colors disabled:opacity-40 text-sm"
+            >
+              <Download className="h-4 w-4" />
+              📥 Export CSV
+            </button>
+          </div>
+        </div>
+
+        {detailLoading ? (
+          <p className="text-muted-foreground text-center py-8">Loading report data...</p>
+        ) : detailData.length === 0 ? (
+          <p className="text-muted-foreground text-center py-8">Select a report type and data will load automatically. No data found for this category.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/30">
+                <tr>
+                  {Object.keys(detailData[0]).filter(k => k !== '_id' && k !== 'tenant_id').map(key => (
+                    <th key={key} className="px-4 py-3 text-left font-semibold capitalize">{key.replace(/_/g, ' ')}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {detailData.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-muted/10 transition-colors">
+                    {Object.keys(row).filter(k => k !== '_id' && k !== 'tenant_id').map(key => {
+                      let val = row[key];
+                      if (key.includes('date') && val) {
+                        try { val = new Date(val).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }); } catch { }
+                      } else if (typeof val === 'number') {
+                        val = val.toLocaleString();
+                      }
+                      return <td key={key} className="px-4 py-3 text-muted-foreground">{String(val ?? '')}</td>;
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* ══════════ EXISTING: Summary Stats ══════════ */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-card border border-border p-6 rounded-xl shadow-sm">
           <div className="flex items-center justify-between">

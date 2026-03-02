@@ -88,7 +88,9 @@ export default function BookingsPage() {
       resetForm();
       fetchData();
     } catch (error) {
-      toast.error(error.response?.data?.detail || 'Failed to create booking');
+      const errDetail = error.response?.data?.detail;
+      const safeMsg = typeof errDetail === 'string' ? errDetail : Array.isArray(errDetail) ? errDetail[0]?.msg : error.message || 'Failed to create booking';
+      toast.error(safeMsg);
     }
   };
 
@@ -113,18 +115,27 @@ export default function BookingsPage() {
       setApproveDialogOpen(false);
       fetchData();
     } catch (error) {
-      toast.error(error.response?.data?.detail || 'Failed to approve booking');
+      const errDetail = error.response?.data?.detail;
+      const safeMsg = typeof errDetail === 'string' ? errDetail : Array.isArray(errDetail) ? errDetail[0]?.msg : error.message || 'Failed to approve booking';
+      toast.error(safeMsg);
     }
   };
 
   const handleReject = async (bookingId) => {
-    if (!window.confirm('Are you sure you want to reject this booking?')) return;
+    const reason = window.prompt('Enter reason for rejection (or leave blank):');
+    if (reason === null) return; // user clicked Cancel
     try {
-      await api.put(`/bookings/${bookingId}`, { approval_status: 'Rejected', status: 'Rejected' });
+      await api.put(`/bookings/${bookingId}`, {
+        approval_status: 'Rejected',
+        status: 'Rejected',
+        notes: reason || 'Rejected by manager'
+      });
       toast.success('Booking rejected');
       fetchData();
     } catch (error) {
-      toast.error('Failed to reject booking');
+      const errDetail = error.response?.data?.detail;
+      const safeMsg = typeof errDetail === 'string' ? errDetail : Array.isArray(errDetail) ? errDetail[0]?.msg : error.message || 'Failed to reject booking';
+      toast.error(safeMsg);
     }
   };
 
@@ -146,7 +157,9 @@ export default function BookingsPage() {
       setReassignDialogOpen(false);
       fetchData();
     } catch (error) {
-      toast.error(error.response?.data?.detail || 'Failed to reassign booking');
+      const errDetail = error.response?.data?.detail;
+      const safeMsg = typeof errDetail === 'string' ? errDetail : Array.isArray(errDetail) ? errDetail[0]?.msg : error.message || 'Failed to reassign booking';
+      toast.error(safeMsg);
     }
   };
 
@@ -344,7 +357,7 @@ export default function BookingsPage() {
       </div>
 
       <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto w-full">
           <table className="w-full">
             <thead className="bg-muted/30 border-b border-border">
               <tr>
@@ -364,7 +377,13 @@ export default function BookingsPage() {
                   <td className="px-6 py-4 text-sm font-mono text-muted-foreground">{booking.booking_id}</td>
                   <td className="px-6 py-4 text-sm font-medium text-foreground">{booking.farmer_name || 'N/A'}</td>
                   <td className="px-6 py-4 text-sm text-muted-foreground">{booking.machine_type || 'N/A'}</td>
-                  <td className="px-6 py-4 text-sm text-muted-foreground">{booking.operator_name || 'Not Assigned'}</td>
+                  <td className="px-6 py-4 text-sm text-muted-foreground">
+                    {booking.operator_name ? (
+                      <span className="text-gray-900 font-medium bg-gray-100 px-2 py-1 rounded">{booking.operator_name}</span>
+                    ) : (
+                      <span className="text-gray-400 italic">Yet to be assigned</span>
+                    )}
+                  </td>
                   <td className="px-6 py-4 text-sm font-mono text-muted-foreground">{new Date(booking.booking_date).toLocaleDateString()}</td>
                   <td className="px-6 py-4 text-sm text-muted-foreground">{booking.field_location}</td>
                   <td className="px-6 py-4 text-sm">
@@ -375,24 +394,25 @@ export default function BookingsPage() {
                   </td>
                   <td className="px-6 py-4 text-sm text-right">
                     {!isReadOnly && booking.approval_status === 'Pending' && (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openApproveDialog(booking.booking_id)}
-                          data-testid={`approve-booking-${booking.booking_id}`}
-                        >
-                          <CheckCircle className="h-4 w-4 text-green-600" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleReject(booking.booking_id)}
-                          data-testid={`reject-booking-${booking.booking_id}`}
-                        >
-                          <XCircle className="h-4 w-4 text-red-600" />
-                        </Button>
-                      </>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openApproveDialog(booking.booking_id)}
+                        data-testid={`approve-booking-${booking.booking_id}`}
+                      >
+                        <CheckCircle className="h-4 w-4 text-green-600" />
+                      </Button>
+                    )}
+                    {!isReadOnly && (booking.approval_status === 'Pending' || booking.status === 'Confirmed') && booking.status !== 'Rejected' && booking.status !== 'Completed' && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleReject(booking.booking_id)}
+                        data-testid={`reject-booking-${booking.booking_id}`}
+                        title={booking.status === 'Confirmed' ? 'Emergency Reject' : 'Reject'}
+                      >
+                        <XCircle className={`h-4 w-4 ${booking.status === 'Confirmed' ? 'text-orange-600' : 'text-red-600'}`} />
+                      </Button>
                     )}
                     {!isReadOnly && booking.status === 'Paused' && (
                       <Button

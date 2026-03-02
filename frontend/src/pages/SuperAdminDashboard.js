@@ -9,7 +9,8 @@ import { toast } from 'sonner';
 import { Shield, CheckCircle, XCircle, Edit, Trash2, Building2, Tractor, Wrench, MessageSquare, Ban, Send } from 'lucide-react';
 
 const TABS = [
-    { key: 'orgs', label: 'Organizations', icon: Building2, desc: 'Org Admins & Owners' },
+    { key: 'orgs', label: 'Org Admins', icon: Building2, desc: 'Org Admins & Owners' },
+    { key: 'org_management', label: 'Organizations', icon: Building2, desc: 'Tenant Companies' },
     { key: 'farmers', label: 'Farmers', icon: Tractor, desc: 'Customer accounts' },
     { key: 'mechanics', label: 'Mechanics', icon: Wrench, desc: 'Freelance contractors' },
     { key: 'support', label: 'Support Inbox', icon: MessageSquare, desc: 'User appeals & tickets' },
@@ -29,6 +30,9 @@ export default function SuperAdminDashboard() {
     const [suspendDialogOpen, setSuspendDialogOpen] = useState(false);
     const [suspendingUser, setSuspendingUser] = useState(null);
     const [suspendReason, setSuspendReason] = useState('');
+    const [orgsList, setOrgsList] = useState([]);
+    const [createOrgDialogOpen, setCreateOrgDialogOpen] = useState(false);
+    const [createOrgForm, setCreateOrgForm] = useState({ company_name: '', contact_email: '', phone: '', owner_name: '', owner_email: '' });
     const chatBottomRef = useRef(null);
 
     useEffect(() => { fetchAll(); }, []);
@@ -38,12 +42,13 @@ export default function SuperAdminDashboard() {
     const fetchAll = async () => {
         setLoading(true);
         try {
-            const [orgAdminRes, ownerRes, farmerRes, mechRes, pendingRes] = await Promise.all([
+            const [orgAdminRes, ownerRes, farmerRes, mechRes, pendingRes, orgsRes] = await Promise.all([
                 api.get('/admin/users?role=org_admin'),
                 api.get('/admin/users?role=owner'),
                 api.get('/admin/users?role=farmer'),
                 api.get('/admin/users?role=mechanic'),
                 api.get('/admin/users/pending'),
+                api.get('/admin/organizations')
             ]);
             setTabUsers({
                 orgs: [...orgAdminRes.data, ...ownerRes.data],
@@ -51,7 +56,8 @@ export default function SuperAdminDashboard() {
                 mechanics: mechRes.data,
             });
             setPendingUsers(pendingRes.data);
-        } catch { toast.error('Failed to load users'); }
+            setOrgsList(orgsRes.data);
+        } catch { toast.error('Failed to load users or organizations'); }
         finally { setLoading(false); }
     };
 
@@ -113,10 +119,45 @@ export default function SuperAdminDashboard() {
         e.preventDefault();
         if (!replyText.trim() || !selectedTicket) return;
         try {
-            await api.put(`/admin/support/tickets/${selectedTicket.username}/reply`, { message_text: replyText.trim() });
+            if (selectedTicket.username.startsWith('guest_')) {
+                await api.post(`/admin/inquiries/${selectedTicket.username}/reply`, { message: replyText.trim() });
+                toast.success('Reply emailed to guest successfully');
+            } else {
+                await api.put(`/admin/support/tickets/${selectedTicket.username}/reply`, { message_text: replyText.trim() });
+            }
             setReplyText('');
             await fetchTickets();
         } catch { toast.error('Failed to send reply'); }
+    };
+
+    const handleCreateOrgSubmit = async (e) => {
+        e.preventDefault();
+        try {
+            const res = await api.post('/admin/organizations', createOrgForm);
+            const data = res.data;
+            if (data.temp_password) {
+                toast.success(`Organization created! Email failed — Owner credentials: Username: ${data.owner_username}, Password: ${data.temp_password}`, { duration: 15000 });
+            } else {
+                toast.success(`Organization created! Credentials emailed to ${data.owner_email}`);
+            }
+            setCreateOrgDialogOpen(false);
+            setCreateOrgForm({ company_name: '', contact_email: '', phone: '', owner_name: '', owner_email: '' });
+            fetchAll();
+        } catch (err) {
+            toast.error(err.response?.data?.detail || err.message || 'Failed to create organization');
+        }
+    };
+
+    const handleDeleteOrg = async (orgId, orgName) => {
+        if (!window.confirm(`⚠️ PERMANENT DELETE\n\nAre you sure you want to delete "${orgName}" (${orgId})?\n\nThis will permanently delete ALL users, machines, bookings, maintenance records, and data for this organization.\n\nThis action CANNOT be undone.`)) return;
+        try {
+            const res = await api.delete(`/admin/organizations/${orgId}`);
+            toast.success(`${res.data.message} (${res.data.total_deleted} documents removed)`);
+            setOrgsList(prev => prev.filter(o => o.organization_id !== orgId));
+            fetchAll();
+        } catch (err) {
+            toast.error(err.response?.data?.detail || 'Failed to delete organization');
+        }
     };
 
     const getStatusColor = (s) => s === 'Active' ? 'bg-green-100 text-green-700' : s === 'Pending' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700';
@@ -201,11 +242,11 @@ export default function SuperAdminDashboard() {
                                     <div className="flex items-start justify-between gap-2">
                                         <div className="min-w-0">
                                             <p className="font-semibold text-sm text-foreground truncate">
-                                                {ticket.user_info?.full_name || ticket.username}
+                                                {ticket.user_info?.full_name || ticket.name || ticket.username}
                                             </p>
                                             <p className="text-xs text-muted-foreground truncate">@{ticket.username}</p>
-                                            {ticket.user_info?.email && (
-                                                <p className="text-xs text-muted-foreground truncate">{ticket.user_info.email}</p>
+                                            {(ticket.user_info?.email || ticket.email) && (
+                                                <p className="text-xs text-muted-foreground truncate">{ticket.user_info?.email || ticket.email}</p>
                                             )}
                                         </div>
                                         <span className={`shrink-0 text-xs px-2 py-0.5 rounded-full font-semibold ${ticket.status === 'open' ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700'}`}>
@@ -236,11 +277,11 @@ export default function SuperAdminDashboard() {
                                     {/* Thread header with full user context */}
                                     <div className="px-4 py-3 border-b border-border bg-muted/10 space-y-1">
                                         <p className="font-semibold text-sm text-foreground">
-                                            {selectedTicket.user_info?.full_name || selectedTicket.username}
+                                            {selectedTicket.user_info?.full_name || selectedTicket.name || selectedTicket.username}
                                             <span className="font-normal text-muted-foreground ml-1">(@{selectedTicket.username})</span>
                                         </p>
-                                        {selectedTicket.user_info?.email && (
-                                            <p className="text-xs text-muted-foreground">{selectedTicket.user_info.email}</p>
+                                        {(selectedTicket.user_info?.email || selectedTicket.email) && (
+                                            <p className="text-xs text-muted-foreground">{selectedTicket.user_info?.email || selectedTicket.email}</p>
                                         )}
                                         {selectedTicket.user_info?.suspension_reason && (
                                             <div className="text-xs bg-red-50 border border-red-200 text-red-700 rounded px-2 py-1">
@@ -276,50 +317,88 @@ export default function SuperAdminDashboard() {
                     </div>
                 )}
 
-                {/* Users Table (for non-support tabs) */}
+                {/* Users / Organizations Table (for non-support tabs) */}
                 {activeTab !== 'support' && (
                     <>
-                        <div className="px-6 py-3 bg-muted/20 border-b border-border">
+                        <div className="px-6 py-3 bg-muted/20 border-b border-border flex justify-between items-center">
                             <p className="text-xs text-muted-foreground">
-                                {TABS.find(t => t.key === activeTab)?.desc} — {currentUsers.length} record{currentUsers.length !== 1 ? 's' : ''}
+                                {TABS.find(t => t.key === activeTab)?.desc}
                             </p>
+                            {activeTab === 'org_management' && (
+                                <Button size="sm" onClick={() => setCreateOrgDialogOpen(true)}>
+                                    <Building2 className="w-4 h-4 mr-2" /> Create Organization
+                                </Button>
+                            )}
                         </div>
 
                         <div className="overflow-x-auto">
-                            <table className="w-full">
-                                <thead className="bg-muted/30 border-b border-border">
-                                    <tr>
-                                        <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Username</th>
-                                        <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Full Name</th>
-                                        <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Email</th>
-                                        <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Role</th>
-                                        {activeTab === 'orgs' && <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Org ID</th>}
-                                        <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Status</th>
-                                        <th className="px-6 py-3 text-right text-xs font-semibold text-foreground uppercase tracking-wider">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-border">
-                                    {currentUsers.length === 0 ? (
-                                        <tr><td colSpan={activeTab === 'orgs' ? 7 : 6} className="px-6 py-10 text-center text-muted-foreground">No users found.</td></tr>
-                                    ) : currentUsers.map((user) => (
-                                        <tr key={user.username} data-testid={`user-row-${user.username}`}>
-                                            <td className="px-6 py-4 text-sm font-mono text-muted-foreground">{user.username}</td>
-                                            <td className="px-6 py-4 text-sm font-medium text-foreground">{user.full_name}</td>
-                                            <td className="px-6 py-4 text-sm text-muted-foreground">{user.email}</td>
-                                            <td className="px-6 py-4 text-sm"><span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${getRoleBadge(user.role)}`}>{user.role}</span></td>
-                                            {activeTab === 'orgs' && <td className="px-6 py-4 text-sm font-mono text-muted-foreground">{user.organization_id}</td>}
-                                            <td className="px-6 py-4 text-sm"><span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${getStatusColor(user.status)}`}>{user.status}</span></td>
-                                            <td className="px-6 py-4 text-sm text-right flex items-center justify-end gap-1">
-                                                <Button variant="ghost" size="sm" onClick={() => openEditDialog(user)} data-testid={`edit-user-${user.username}`} title="Edit"><Edit className="h-4 w-4" /></Button>
-                                                {user.status !== 'Suspended' && (
-                                                    <Button variant="ghost" size="sm" onClick={() => openSuspendDialog(user)} data-testid={`suspend-user-${user.username}`} title="Suspend"><Ban className="h-4 w-4 text-orange-500" /></Button>
-                                                )}
-                                                <Button variant="ghost" size="sm" onClick={() => handleDelete(user.username)} data-testid={`delete-user-${user.username}`} title="Delete"><Trash2 className="h-4 w-4 text-destructive" /></Button>
-                                            </td>
+                            {activeTab === 'org_management' ? (
+                                <table className="w-full">
+                                    <thead className="bg-muted/30 border-b border-border">
+                                        <tr>
+                                            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Org ID</th>
+                                            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Name</th>
+                                            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Contact Email</th>
+                                            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Phone</th>
+                                            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Created At</th>
+                                            <th className="px-6 py-3 text-right text-xs font-semibold text-foreground uppercase tracking-wider">Actions</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                                    </thead>
+                                    <tbody className="divide-y divide-border">
+                                        {orgsList.length === 0 ? (
+                                            <tr><td colSpan={6} className="px-6 py-10 text-center text-muted-foreground">No organizations found.</td></tr>
+                                        ) : orgsList.map((org) => (
+                                            <tr key={org.organization_id}>
+                                                <td className="px-6 py-4 text-sm font-mono text-muted-foreground">{org.organization_id}</td>
+                                                <td className="px-6 py-4 text-sm font-medium text-foreground">{org.name}</td>
+                                                <td className="px-6 py-4 text-sm text-muted-foreground">{org.contact_email}</td>
+                                                <td className="px-6 py-4 text-sm text-muted-foreground">{org.phone || '-'}</td>
+                                                <td className="px-6 py-4 text-sm text-muted-foreground">{formatTime(org.created_at)}</td>
+                                                <td className="px-6 py-4 text-sm text-right">
+                                                    <Button variant="ghost" size="sm" onClick={() => handleDeleteOrg(org.organization_id, org.name)} title="Delete Organization" className="text-destructive hover:text-destructive hover:bg-red-50">
+                                                        <Trash2 className="h-4 w-4" />
+                                                    </Button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            ) : (
+                                <table className="w-full">
+                                    <thead className="bg-muted/30 border-b border-border">
+                                        <tr>
+                                            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Username</th>
+                                            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Full Name</th>
+                                            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Email</th>
+                                            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Role</th>
+                                            {activeTab === 'orgs' && <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Org ID</th>}
+                                            <th className="px-6 py-3 text-left text-xs font-semibold text-foreground uppercase tracking-wider">Status</th>
+                                            <th className="px-6 py-3 text-right text-xs font-semibold text-foreground uppercase tracking-wider">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-border">
+                                        {currentUsers.length === 0 ? (
+                                            <tr><td colSpan={activeTab === 'orgs' ? 7 : 6} className="px-6 py-10 text-center text-muted-foreground">No users found.</td></tr>
+                                        ) : currentUsers.map((user) => (
+                                            <tr key={user.username} data-testid={`user-row-${user.username}`}>
+                                                <td className="px-6 py-4 text-sm font-mono text-muted-foreground">{user.username}</td>
+                                                <td className="px-6 py-4 text-sm font-medium text-foreground">{user.full_name}</td>
+                                                <td className="px-6 py-4 text-sm text-muted-foreground">{user.email}</td>
+                                                <td className="px-6 py-4 text-sm"><span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${getRoleBadge(user.role)}`}>{user.role}</span></td>
+                                                {activeTab === 'orgs' && <td className="px-6 py-4 text-sm font-mono text-muted-foreground">{user.organization_id}</td>}
+                                                <td className="px-6 py-4 text-sm"><span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${getStatusColor(user.status)}`}>{user.status}</span></td>
+                                                <td className="px-6 py-4 text-sm text-right flex items-center justify-end gap-1">
+                                                    <Button variant="ghost" size="sm" onClick={() => openEditDialog(user)} data-testid={`edit-user-${user.username}`} title="Edit"><Edit className="h-4 w-4" /></Button>
+                                                    {user.status !== 'Suspended' && (
+                                                        <Button variant="ghost" size="sm" onClick={() => openSuspendDialog(user)} data-testid={`suspend-user-${user.username}`} title="Suspend"><Ban className="h-4 w-4 text-orange-500" /></Button>
+                                                    )}
+                                                    <Button variant="ghost" size="sm" onClick={() => handleDelete(user.username)} data-testid={`delete-user-${user.username}`} title="Delete"><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
                         </div>
                     </>
                 )}
@@ -360,6 +439,39 @@ export default function SuperAdminDashboard() {
                         <div className="flex justify-end gap-2">
                             <Button type="button" variant="outline" onClick={() => setEditDialogOpen(false)}>Cancel</Button>
                             <Button type="submit" data-testid="save-user-btn">Save</Button>
+                        </div>
+                    </form>
+                </DialogContent>
+            </Dialog>
+
+            {/* Create Organization Dialog */}
+            <Dialog open={createOrgDialogOpen} onOpenChange={setCreateOrgDialogOpen}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader><DialogTitle>Create Organization</DialogTitle></DialogHeader>
+                    <form onSubmit={handleCreateOrgSubmit} className="space-y-4">
+                        <div>
+                            <Label>Company Name *</Label>
+                            <Input value={createOrgForm.company_name} onChange={(e) => setCreateOrgForm({ ...createOrgForm, company_name: e.target.value })} required />
+                        </div>
+                        <div>
+                            <Label>Contact Email *</Label>
+                            <Input type="email" value={createOrgForm.contact_email} onChange={(e) => setCreateOrgForm({ ...createOrgForm, contact_email: e.target.value })} required />
+                        </div>
+                        <div>
+                            <Label>Phone</Label>
+                            <Input value={createOrgForm.phone} onChange={(e) => setCreateOrgForm({ ...createOrgForm, phone: e.target.value })} />
+                        </div>
+                        <div>
+                            <Label>Owner Name *</Label>
+                            <Input value={createOrgForm.owner_name} onChange={(e) => setCreateOrgForm({ ...createOrgForm, owner_name: e.target.value })} required placeholder="e.g. John Doe" />
+                        </div>
+                        <div>
+                            <Label>Owner Email *</Label>
+                            <Input type="email" value={createOrgForm.owner_email} onChange={(e) => setCreateOrgForm({ ...createOrgForm, owner_email: e.target.value })} required placeholder="owner@company.com" />
+                        </div>
+                        <div className="flex justify-end gap-2">
+                            <Button type="button" variant="outline" onClick={() => setCreateOrgDialogOpen(false)}>Cancel</Button>
+                            <Button type="submit">Create</Button>
                         </div>
                     </form>
                 </DialogContent>

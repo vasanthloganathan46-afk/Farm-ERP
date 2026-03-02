@@ -466,7 +466,7 @@ export default function MaintenancePage() {
         {records.length === 0 ? (
           <div className="p-12 text-center text-muted-foreground">No maintenance records found.</div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto w-full">
             <table className="w-full">
               <thead className="bg-muted/40 border-b border-border">
                 <tr>

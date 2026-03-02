@@ -102,6 +102,28 @@ class SupportMessageCreate(BaseModel):
 class SupportReplyCreate(BaseModel):
     message_text: str
 
+class SupportGuestInquiryCreate(BaseModel):
+    name: str
+    email: EmailStr
+    message: str
+
+class InquiryReplyCreate(BaseModel):
+    message: str
+
+class OrganizationCreate(BaseModel):
+    company_name: str
+    contact_email: EmailStr
+    phone: Optional[str] = None
+    owner_name: str
+    owner_email: EmailStr
+
+class ManagerCreate(BaseModel):
+    full_name: str
+    email: EmailStr
+    phone: Optional[str] = None
+    password: Optional[str] = None
+    monthly_salary: Optional[float] = 0.0
+
 class UserResponse(BaseModel):
     username: str
     full_name: str
@@ -110,13 +132,20 @@ class UserResponse(BaseModel):
     phone: Optional[str] = None
     organization_id: Optional[str] = None
     status: Optional[str] = None
+    company_name: Optional[str] = None
+    tenant_name: Optional[str] = None
+    tenant_id: Optional[str] = None
+    monthly_salary: Optional[float] = None
+    must_change_password: Optional[bool] = False
+    hourly_wage: Optional[float] = None
 
 class OperatorCreate(BaseModel):
     username: str
     full_name: str
     email: str
     phone: Optional[str] = None
-    password: str
+    password: Optional[str] = None
+    hourly_wage: Optional[float] = 0.0
 
 class OperatorUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -154,12 +183,16 @@ class Machinery(BaseModel):
     curr_village: Optional[str] = None
     created_at: str
     organization_id: str = "default_org"
+    company_name: Optional[str] = None
+    company_rating: Optional[float] = None
 
 class MachineryCreate(BaseModel):
     machine_type: str
     rate_per_hour: float
     rate_per_acre: float
     description: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 class MachineryUpdate(BaseModel):
     machine_type: Optional[str] = None
@@ -173,7 +206,7 @@ class Employee(BaseModel):
     employee_id: str
     name: str
     role: str
-    department: str
+    department: Optional[str] = None
     skill: str
     joining_date: str
     wage_rate: float
@@ -183,7 +216,7 @@ class Employee(BaseModel):
 class EmployeeCreate(BaseModel):
     name: str
     role: str
-    department: str
+    department: Optional[str] = None
     skill: str
     joining_date: str
     wage_rate: float
@@ -194,6 +227,7 @@ class Booking(BaseModel):
     farmer_id: str
     machinery_id: str
     operator_id: Optional[str] = None
+    operator_name: Optional[str] = None
     booking_date: str
     field_location: str
     expected_hours: Optional[float] = None
@@ -204,9 +238,10 @@ class Booking(BaseModel):
     organization_id: str = "default_org"
     farmer_name: Optional[str] = None
     machine_type: Optional[str] = None
-    machine_type: Optional[str] = None
-    operator_name: Optional[str] = None
+    machine_status: Optional[str] = None
     notes: Optional[str] = None
+    rating: Optional[int] = None
+    review: Optional[str] = None
 
 class BookingCreate(BaseModel):
     machinery_id: str
@@ -220,6 +255,9 @@ class BookingUpdate(BaseModel):
     operator_id: Optional[str] = None
     status: Optional[str] = None
     approval_status: Optional[str] = None
+    notes: Optional[str] = None
+    rating: Optional[int] = None
+    review: Optional[str] = None
 
 class BookingReassign(BaseModel):
     machinery_id: str
@@ -370,6 +408,8 @@ class DashboardStats(BaseModel):
     pending_payments: float
     total_farmers: int
     total_employees: int
+    average_rating: Optional[float] = 0.0
+    total_reviews: Optional[int] = 0
 
 class AvailabilityCheck(BaseModel):
     machinery_id: str
@@ -486,7 +526,7 @@ async def register_farmer(farmer_data: FarmerRegister):
         "email": farmer_data.email,
         "phone": farmer_data.phone,
         "password_hash": hash_password(farmer_data.password),
-        "organization_id": "default_org",
+        "organization_id": None,
         "village": farmer_data.village,
         "land_size": farmer_data.land_size,
         "status": "Pending",
@@ -541,6 +581,17 @@ async def login(request: LoginRequest):
     )
     
     user_response = UserResponse(**user)
+    # Carry must_change_password from DB
+    user_response.must_change_password = user.get("must_change_password", False)
+
+    # Populate company_name from org so it's available immediately at login
+    org_id = user.get("organization_id")
+    if org_id and org_id != "default_org":
+        org = await db.organizations.find_one({"organization_id": org_id})
+        if org:
+            user_response.company_name = org.get("name", "")
+            user_response.tenant_name = org.get("name", "")
+
     return LoginResponse(
         access_token=access_token,
         token_type="bearer",
@@ -549,6 +600,23 @@ async def login(request: LoginRequest):
 
 @api_router.get("/auth/me", response_model=UserResponse)
 async def get_me(current_user: UserResponse = Depends(get_current_user)):
+    # Verified dependency: get_current_user is used and NOT restricted to Super Admin role
+    user_dict = current_user.model_dump()
+    if user_dict.get("organization_id") and user_dict["organization_id"] != "default_org":
+        org = await db.organizations.find_one({"organization_id": user_dict["organization_id"]})
+        if org:
+            current_user.company_name = org.get("name", "Unknown Organization")
+            current_user.tenant_name = org.get("name", "Unknown Organization")
+        else:
+            current_user.company_name = "No Org Found"
+            current_user.tenant_name = "No Org Found"
+    elif current_user.tenant_id:
+        from bson import ObjectId
+        org = await db.organizations.find_one({"_id": ObjectId(current_user.tenant_id)})
+        if org:
+            current_user.company_name = org.get("name") # Using name, not company_name which might be missing
+            current_user.tenant_name = org.get("name")
+            
     return current_user
 
 @api_router.get("/farmers", response_model=List[UserResponse])
@@ -741,9 +809,9 @@ async def get_org_operators(current_user: UserResponse = Depends(get_current_use
     ).to_list(1000)
     return [UserResponse(**o) for o in operators]
 
-@api_router.post("/org/operators", response_model=UserResponse)
+@api_router.post("/org/operators")
 async def create_org_operator(operator: OperatorCreate, current_user: UserResponse = Depends(get_current_user)):
-    """Org Admin: create a new operator for this organization."""
+    """Org Admin: create a new operator for this organization + email credentials."""
     if current_user.role not in ["org_admin"]:
         raise HTTPException(status_code=403, detail="Only Org Admin can create operators")
     # Check username uniqueness
@@ -754,19 +822,53 @@ async def create_org_operator(operator: OperatorCreate, current_user: UserRespon
     existing_email = await db.users.find_one({"email": operator.email})
     if existing_email:
         raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Auto-generate temp password (operator never sees their own password creation)
+    raw_password = secrets.token_urlsafe(10)
+
     user_doc = {
         "username": operator.username,
         "full_name": operator.full_name,
         "role": "operator",
         "email": operator.email,
         "phone": operator.phone,
-        "password_hash": hash_password(operator.password),
+        "password_hash": hash_password(raw_password),
         "organization_id": current_user.organization_id,
+        "hourly_wage": operator.hourly_wage or 0.0,
+        "must_change_password": True,
         "status": "Active",
         "created_at": datetime.now(timezone.utc).isoformat()
     }
+    user_doc["tenant_id"] = current_user.tenant_id
+    user_doc["role"] = "operator"
     await db.users.insert_one(user_doc)
-    return UserResponse(**user_doc)
+
+    # Get company name for email
+    org = await db.organizations.find_one({"organization_id": current_user.organization_id})
+    company_name = org.get("name", "Your Organization") if org else "Your Organization"
+
+    # Try to send welcome email to operator
+    email_sent = False
+    try:
+        send_welcome_email(
+            to_email=operator.email,
+            owner_name=operator.full_name,
+            company_name=company_name,
+            username=operator.username,
+            temp_password=raw_password,
+            role_title="Operator"
+        )
+        email_sent = True
+    except Exception as e:
+        print(f"[OPERATOR] WARNING: Welcome email failed for {operator.email}: {e}")
+
+    user_doc.pop("_id", None)
+    user_doc.pop("password_hash", None)
+
+    response = {**user_doc, "email_sent": email_sent}
+    if not email_sent:
+        response["temp_password"] = raw_password
+    return response
 
 @api_router.put("/org/operators/{username}", response_model=UserResponse)
 async def update_org_operator(username: str, update: OperatorUpdate, current_user: UserResponse = Depends(get_current_user)):
@@ -868,6 +970,107 @@ def send_reset_email(to_email: str, reset_link: str):
         # Fallback: always print the link so the user isn't blocked
         print(f">>> [FALLBACK] PASSWORD RESET LINK for {to_email}:\n    {reset_link}\n")
 
+def send_reply_email(to_email: str, message_text: str):
+    """Send admin reply email via SMTP with strict Gmail TLS sequence."""
+    if not SMTP_USERNAME or not SMTP_PASSWORD:
+        print("\n" + "="*60)
+        print(f"WARNING: SMTP credentials missing. Fake sent reply to {to_email}: {message_text}")
+        print("="*60)
+        return
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "AgriGear ERP - Support Reply"
+    msg["From"]    = f"{SMTP_FROM} <{SMTP_USERNAME}>"
+    msg["To"]      = to_email
+    html_body = f"""
+    <html><body style="font-family:sans-serif;max-width:600px;margin:auto">
+      <div style="background:#0F3D3E;padding:24px;border-radius:8px 8px 0 0">
+        <h1 style="color:white;margin:0">AgriGear ERP Support</h1>
+      </div>
+      <div style="padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px">
+        <p>Hello,</p>
+        <p>An admin has replied to your inquiry:</p>
+        <blockquote style="background:#f3f4f6;padding:16px;border-left:4px solid #10b981;margin:16px 0;">
+          {message_text}
+        </blockquote>
+        <p style="color:#6b7280;font-size:12px">Thank you, AgriGear ERP Team</p>
+      </div>
+    </body></html>
+    """
+    msg.attach(MIMEText(html_body, "html"))
+
+    print(f"\n[EMAIL] Attempting SMTP connection → {SMTP_SERVER}:{SMTP_PORT} as {SMTP_USERNAME}")
+    try:
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.ehlo()
+        server.starttls()
+        server.ehlo()
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        print(f"SUCCESS: Reply email sent to {to_email}")
+    except Exception as e:
+        print(f"\nSMTP EXCEPTION: {str(e)}")
+        logging.error(f"[EMAIL] SMTP failure for {to_email}: {str(e)}")
+
+def send_welcome_email(to_email: str, owner_name: str, company_name: str, username: str, temp_password: str, role_title: str = "Owner"):
+    """Send 'Welcome to AgriGear ERP' email with login credentials."""
+    if not SMTP_USERNAME or not SMTP_PASSWORD:
+        print("\n" + "="*60)
+        print(f"WARNING: SMTP credentials missing. Printing credentials to terminal instead.")
+        print(f"  TO: {to_email}")
+        print(f"  Name: {owner_name}")
+        print(f"  Role: {role_title}")
+        print(f"  Company: {company_name}")
+        print(f"  Username: {username}")
+        print(f"  Password: {temp_password}")
+        print(f"  Login URL: {FRONTEND_URL}/login")
+        print("="*60)
+        return
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"Welcome to AgriGear ERP \u2014 {company_name}"
+    msg["From"]    = f"{SMTP_FROM} <{SMTP_USERNAME}>"
+    msg["To"]      = to_email
+    html_body = f"""
+    <html><body style="font-family:sans-serif;max-width:600px;margin:auto">
+      <div style="background:#16a34a;padding:24px;border-radius:12px 12px 0 0;text-align:center">
+        <h1 style="color:white;margin:0">\U0001f69c Welcome to AgriGear ERP</h1>
+      </div>
+      <div style="padding:24px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:0 0 12px 12px">
+        <p>Hello <strong>{owner_name}</strong>,</p>
+        <p>You have been added as a <strong>{role_title}</strong> for the organization
+           <strong>{company_name}</strong> on AgriGear ERP. Here are your login credentials:</p>
+        <div style="background:white;border:1px solid #d1d5db;border-radius:8px;padding:16px;margin:16px 0">
+          <p style="margin:4px 0"><strong>Login URL:</strong> <a href="{FRONTEND_URL}/login">{FRONTEND_URL}/login</a></p>
+          <p style="margin:4px 0"><strong>Email:</strong> {to_email}</p>
+          <p style="margin:4px 0"><strong>Username:</strong> {username}</p>
+          <p style="margin:4px 0"><strong>Temporary Password:</strong> <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px">{temp_password}</code></p>
+        </div>
+        <p style="color:#dc2626;font-weight:bold">\u26a0\ufe0f Please change your password immediately after first login.</p>
+        <p style="color:#6b7280;font-size:12px">If you did not expect this email, please contact the AgriGear ERP support team.</p>
+      </div>
+    </body></html>
+    """
+    msg.attach(MIMEText(html_body, "html"))
+
+    print(f"\n[EMAIL] Sending welcome email to {to_email} for org '{company_name}' as {role_title}")
+    try:
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.ehlo()
+        server.starttls()
+        server.ehlo()
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        print(f"SUCCESS: Welcome email sent to {to_email}")
+    except Exception as e:
+        print(f"\nSMTP EXCEPTION: {str(e)}")
+        print(f">>> [FALLBACK] Credentials for {to_email}:")
+        print(f"    Username: {username}")
+        print(f"    Password: {temp_password}")
+        logging.error(f"[EMAIL] SMTP failure for welcome email to {to_email}: {str(e)}")
+
 # ============ PASSWORD RESET FLOW ============
 
 @api_router.post("/auth/forgot-password")
@@ -902,6 +1105,167 @@ async def reset_password(request: ResetPasswordRequest):
          "$unset": {"reset_token": "", "reset_token_expires": ""}}
     )
     return {"message": "Password reset successful. You can now log in with your new password."}
+
+# ---- Forced password change for first login ----
+class ChangePasswordRequest(BaseModel):
+    new_password: str
+
+@api_router.put("/users/change-password")
+async def change_password(data: ChangePasswordRequest, current_user: UserResponse = Depends(get_current_user)):
+    """Authenticated user changes their own password. Clears must_change_password flag."""
+    if len(data.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    await db.users.update_one(
+        {"username": current_user.username},
+        {"$set": {"password_hash": hash_password(data.new_password), "must_change_password": False}}
+    )
+    return {"message": "Password updated successfully"}
+
+# ---- Drill-down report detail endpoint ----
+@api_router.get("/dashboard/reports/{report_type}")
+async def get_report_details(report_type: str, current_user: UserResponse = Depends(get_current_user)):
+    """Return detailed data for a dashboard card drill-down."""
+    if current_user.role not in ["org_admin", "owner"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    org_id = current_user.organization_id
+
+    if report_type == "revenue":
+        bookings = await db.bookings.find(
+            {"organization_id": org_id, "status": "Completed"},
+            {"_id": 0}
+        ).to_list(500)
+        result = []
+        for b in bookings:
+            mach = await db.machinery.find_one({"machinery_id": b.get("machinery_id")}, {"_id": 0})
+            farmer = await db.users.find_one({"username": b.get("farmer_id")}, {"_id": 0})
+            hours = b.get("actual_hours") or b.get("expected_hours") or 0
+            rate = mach.get("rate_per_hour", 0) if mach else 0
+            result.append({
+                "date": b.get("booking_date", ""),
+                "machine": mach.get("machine_type", "N/A") if mach else "N/A",
+                "farmer": farmer.get("full_name", "N/A") if farmer else "N/A",
+                "hours": hours,
+                "amount": round(hours * rate, 2)
+            })
+        return result
+
+    elif report_type == "diesel":
+        fuel_logs = await db.fuel_expenses.find(
+            {"organization_id": org_id},
+            {"_id": 0}
+        ).to_list(500)
+        result = []
+        for f in fuel_logs:
+            mach = await db.machinery.find_one({"machinery_id": f.get("machinery_id")}, {"_id": 0})
+            result.append({
+                "date": f.get("date", ""),
+                "machine": mach.get("machine_type", "N/A") if mach else "N/A",
+                "liters": f.get("liters", 0),
+                "cost_per_liter": f.get("cost_per_liter", 0),
+                "total_cost": round(f.get("total_cost", 0), 2)
+            })
+        return result
+
+    elif report_type == "wages":
+        wages = await db.wages.find(
+            {"organization_id": org_id},
+            {"_id": 0}
+        ).to_list(500)
+        result = []
+        for w in wages:
+            # Resolve employee name from users collection if missing
+            emp_name = w.get("employee_name")
+            if not emp_name or emp_name == "N/A":
+                uid = w.get("employee_id") or w.get("operator_id") or w.get("user_id")
+                if uid:
+                    emp = await db.users.find_one({"username": uid}, {"_id": 0})
+                    if not emp:
+                        emp = await db.users.find_one({"email": uid}, {"_id": 0})
+                    emp_name = emp.get("full_name", uid) if emp else uid
+            result.append({
+                "date": w.get("date", w.get("created_at", "")),
+                "employee": emp_name or "N/A",
+                "role": w.get("employee_role", w.get("role", "N/A")),
+                "amount": round(w.get("wage_amount", w.get("amount", 0)), 2),
+                "status": w.get("payment_status", w.get("status", "N/A"))
+            })
+        return result
+
+    elif report_type == "maintenance":
+        records = await db.maintenance.find(
+            {"organization_id": org_id},
+            {"_id": 0}
+        ).to_list(500)
+        result = []
+        for m in records:
+            mach = await db.machinery.find_one({"machinery_id": m.get("machinery_id")}, {"_id": 0})
+            result.append({
+                "date": m.get("created_at", ""),
+                "machine": mach.get("machine_type", "N/A") if mach else "N/A",
+                "issue": m.get("issue_description", m.get("description", "N/A")),
+                "mechanic": m.get("mechanic_name", "N/A"),
+                "cost": round(m.get("cost", 0), 2),
+                "status": m.get("status", "N/A")
+            })
+        return result
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown report type: {report_type}")
+
+# ---- Manager Monthly Payroll Generator ----
+@api_router.post("/wages/generate-managers")
+async def generate_manager_payroll(current_user: UserResponse = Depends(get_current_user)):
+    """Generate monthly salary records for all org_admin managers."""
+    if current_user.role not in ["owner", "org_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    now = datetime.now(timezone.utc)
+    month_key = now.strftime("%Y-%m")  # e.g. "2026-03"
+    org_id = current_user.organization_id
+
+    managers = await db.users.find(
+        {"role": "org_admin", "organization_id": org_id},
+        {"_id": 0}
+    ).to_list(100)
+
+    generated = 0
+    skipped = 0
+    for mgr in managers:
+        salary = mgr.get("monthly_salary", 0)
+        if not salary or salary <= 0:
+            skipped += 1
+            continue
+        # Prevent duplicate: check if wage for this month already exists
+        existing = await db.wages.find_one({
+            "employee_id": mgr["username"],
+            "payroll_month": month_key,
+            "organization_id": org_id
+        })
+        if existing:
+            skipped += 1
+            continue
+        wage_doc = {
+            "wage_id": f"SAL-{mgr['username']}-{month_key}",
+            "employee_id": mgr["username"],
+            "employee_name": mgr.get("full_name", mgr["username"]),
+            "employee_role": "org_admin",
+            "role": "org_admin",
+            "wage_amount": salary,
+            "payment_status": "pending",
+            "payroll_month": month_key,
+            "organization_id": org_id,
+            "tenant_id": mgr.get("tenant_id", current_user.tenant_id),
+            "booking_id": f"SALARY-{month_key}",
+            "date": now.isoformat(),
+            "created_at": now.isoformat()
+        }
+        await db.wages.insert_one(wage_doc)
+        generated += 1
+
+    return {
+        "message": f"Payroll generated: {generated} manager(s). Skipped: {skipped} (already exists or no salary set).",
+        "generated": generated,
+        "skipped": skipped
+    }
 
 @api_router.post("/auth/register-mechanic")
 async def register_mechanic(mechanic_data: MechanicRegister):
@@ -944,6 +1308,42 @@ async def suspend_user(username: str, body: SuspendUserRequest, current_user: Us
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
     return {"message": f"User '{username}' suspended"}
+
+@api_router.post("/support/guest-inquiry")
+async def create_guest_inquiry(inquiry: SupportGuestInquiryCreate):
+    """Public (no auth) — prospective users send inquiry to super admin."""
+    if not inquiry.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    guest_username = f"guest_{inquiry.email}"
+
+    message_doc = {
+        "sender": "user",
+        "text": inquiry.message.strip(),
+        "timestamp": now
+    }
+    
+    await db.support_tickets.update_one(
+        {"username": guest_username},
+        {
+            "$push": {"messages": message_doc},
+            "$set": {
+                "status": "open", 
+                "updated_at": now,
+                "role": "guest",
+                "name": inquiry.name,
+                "email": inquiry.email
+            },
+            "$setOnInsert": {
+                "username": guest_username, 
+                "created_at": now
+            }
+        },
+        upsert=True
+    )
+    print(f"[SUPPORT] Guest inquiry saved for '{inquiry.email}': {inquiry.message.strip()[:60]}")
+    return {"message": "Inquiry sent successfully. An admin will contact you soon."}
 
 @api_router.post("/support/tickets")
 async def create_support_message(msg: SupportMessageCreate):
@@ -1099,12 +1499,254 @@ async def admin_reply_to_ticket(username: str, reply: SupportReplyCreate, curren
     )
     return {"message": "Reply sent"}
 
+@api_router.post("/admin/inquiries/{username}/reply")
+async def admin_reply_to_inquiry(username: str, reply: InquiryReplyCreate, current_user: UserResponse = Depends(get_current_user)):
+    """Super Admin: reply to a guest inquiry and trigger an email."""
+    if current_user.role != "super_admin":
+        raise HTTPException(status_code=403, detail="Only Super Admin can reply")
+        
+    ticket = await db.support_tickets.find_one({"username": username})
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Inquiry not found")
+        
+    now = datetime.now(timezone.utc).isoformat()
+    message_doc = {
+        "sender": "admin",
+        "text": reply.message.strip(),
+        "timestamp": now
+    }
+    
+    await db.support_tickets.update_one(
+        {"username": username},
+        {
+            "$push": {"messages": message_doc},
+            "$set": {"status": "replied", "updated_at": now}
+        }
+    )
+    
+    guest_email = ticket.get("email")
+    if guest_email:
+        send_reply_email(guest_email, reply.message.strip())
+        
+    return {"message": "Reply sent and emailed"}
+
+@api_router.post("/admin/organizations")
+async def create_organization(org: OrganizationCreate, current_user: UserResponse = Depends(get_current_user)):
+    """Super Admin: create a new tenant organization + provision Owner account + email credentials."""
+    if current_user.role != "super_admin":
+        raise HTTPException(status_code=403, detail="Only Super Admin can create orgs")
+
+    org_dict = org.model_dump()
+    print(f"PAYLOAD RECEIVED: {org_dict}")
+
+    # --- Check if owner email already exists ---
+    existing_owner = await db.users.find_one({"email": org.owner_email})
+    if existing_owner:
+        raise HTTPException(status_code=400, detail=f"A user with email {org.owner_email} already exists")
+
+    new_org_id = generate_id("ORG")
+    now = datetime.now(timezone.utc).isoformat()
+
+    # --- 1. Create Organization document ---
+    org_doc = {
+        "organization_id": new_org_id,
+        "name": org.company_name,
+        "contact_email": org.contact_email,
+        "phone": org.phone,
+        "created_at": now
+    }
+    await db.organizations.insert_one(org_doc)
+    org_doc.pop("_id", None)
+
+    # --- 2. Create Owner user with temp password ---
+    temp_password = secrets.token_urlsafe(10)  # e.g. "aB3dE_fG7h"
+    owner_username = org.owner_email.split('@')[0] + str(random.randint(100, 999))
+    owner_doc = {
+        "username": owner_username,
+        "full_name": org.owner_name,
+        "role": "owner",
+        "email": org.owner_email,
+        "phone": org.phone,
+        "password_hash": hash_password(temp_password),
+        "organization_id": new_org_id,
+        "status": "Active",
+        "created_at": now
+    }
+    await db.users.insert_one(owner_doc)
+    print(f"[ORG] Created owner '{owner_username}' for org '{new_org_id}' with temp password")
+
+    # --- 3. Try to send welcome email; if it fails, include password in response ---
+    email_sent = False
+    try:
+        send_welcome_email(
+            to_email=org.owner_email,
+            owner_name=org.owner_name,
+            company_name=org.company_name,
+            username=owner_username,
+            temp_password=temp_password
+        )
+        email_sent = True
+    except Exception as e:
+        print(f"[ORG] WARNING: Welcome email failed for {org.owner_email}: {e}")
+        print(f"[ORG] FALLBACK: temp_password will be included in API response")
+
+    response = {
+        **org_doc,
+        "owner_username": owner_username,
+        "owner_email": org.owner_email,
+        "email_sent": email_sent,
+        "message": f"Organization created. Login credentials {'emailed to' if email_sent else 'shown below for'} {org.owner_email}"
+    }
+    # If email failed, include the temp password so Super Admin can relay it manually
+    if not email_sent:
+        response["temp_password"] = temp_password
+    return response
+
+@api_router.get("/admin/organizations")
+async def admin_get_organizations(current_user: UserResponse = Depends(get_current_user)):
+    """Super Admin: list all tenant organizations."""
+    if current_user.role != "super_admin":
+        raise HTTPException(status_code=403, detail="Only Super Admin can view orgs")
+    orgs = await db.organizations.find({}, {"_id": 0}).to_list(1000)
+    return orgs
+
+@api_router.delete("/admin/organizations/{org_id}")
+async def cascade_delete_organization(org_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Super Admin: CASCADE DELETE an organization and ALL its associated data."""
+    if current_user.role != "super_admin":
+        raise HTTPException(status_code=403, detail="Only Super Admin can delete organizations")
+
+    # Verify org exists
+    org = await db.organizations.find_one({"organization_id": org_id})
+    if not org:
+        raise HTTPException(status_code=404, detail=f"Organization '{org_id}' not found")
+
+    org_name = org.get("name", org_id)
+    print(f"\n{'='*60}")
+    print(f"[CASCADE DELETE] Starting for org '{org_name}' ({org_id})")
+
+    # --- Cascade delete all tenant data ---
+    del_users = await db.users.delete_many({"organization_id": org_id})
+    del_machinery = await db.machinery.delete_many({"organization_id": org_id})
+    del_bookings = await db.bookings.delete_many({"organization_id": org_id})
+    del_maintenance = await db.maintenance.delete_many({"organization_id": org_id})
+    del_employees = await db.employees.delete_many({"organization_id": org_id})
+    del_fieldlogs = await db.field_logs.delete_many({"organization_id": org_id})
+    del_invoices = await db.invoices.delete_many({"organization_id": org_id})
+    del_payments = await db.payments.delete_many({"organization_id": org_id})
+    del_wages = await db.wages.delete_many({"organization_id": org_id})
+    del_spareparts = await db.spare_parts.delete_many({"organization_id": org_id})
+    del_org = await db.organizations.delete_one({"organization_id": org_id})
+
+    summary = {
+        "organization": del_org.deleted_count,
+        "users": del_users.deleted_count,
+        "machinery": del_machinery.deleted_count,
+        "bookings": del_bookings.deleted_count,
+        "maintenance": del_maintenance.deleted_count,
+        "employees": del_employees.deleted_count,
+        "field_logs": del_fieldlogs.deleted_count,
+        "invoices": del_invoices.deleted_count,
+        "payments": del_payments.deleted_count,
+        "wages": del_wages.deleted_count,
+        "spare_parts": del_spareparts.deleted_count,
+    }
+    total_deleted = sum(summary.values())
+    print(f"[CASCADE DELETE] Complete. {total_deleted} documents removed: {summary}")
+    print(f"{'='*60}\n")
+
+    return {
+        "message": f"Organization '{org_name}' and all associated data permanently deleted",
+        "deleted_counts": summary,
+        "total_deleted": total_deleted
+    }
+
+@api_router.post("/owner/managers")
+async def create_manager(manager: ManagerCreate, current_user: UserResponse = Depends(get_current_user)):
+    """Owner: create an org_admin for their tenant + email credentials."""
+    if current_user.role != "owner":
+        raise HTTPException(status_code=403, detail="Only Owners can create managers")
+        
+    existing_user = await db.users.find_one({"$or": [{"username": manager.email}, {"email": manager.email}]})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User with this email already exists")
+
+    # Auto-generate secure temp password (owner never sets it manually)
+    raw_password = secrets.token_urlsafe(10)
+    manager_username = manager.email
+
+    manager_doc = {
+        "username": manager_username,
+        "full_name": manager.full_name,
+        "role": "org_admin",
+        "email": manager.email,
+        "phone": manager.phone,
+        "password_hash": hash_password(raw_password),
+        "organization_id": current_user.organization_id,
+        "monthly_salary": manager.monthly_salary or 0.0,
+        "must_change_password": True,
+        "status": "Active",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.users.insert_one(manager_doc)
+
+    # Get company name for the email
+    org = await db.organizations.find_one({"organization_id": current_user.organization_id})
+    company_name = org.get("name", "Your Organization") if org else "Your Organization"
+
+    # Try to send welcome email
+    email_sent = False
+    try:
+        send_welcome_email(
+            to_email=manager.email,
+            owner_name=manager.full_name,
+            company_name=company_name,
+            username=manager_username,
+            temp_password=raw_password,
+            role_title="Manager (Org Admin)"
+        )
+        email_sent = True
+    except Exception as e:
+        print(f"[MANAGER] WARNING: Welcome email failed for {manager.email}: {e}")
+
+    manager_doc.pop("_id", None)
+    manager_doc.pop("password_hash", None)
+
+    response = {
+        **manager_doc,
+        "email_sent": email_sent,
+        "message": f"Manager created. Credentials {'emailed to' if email_sent else 'shown below for'} {manager.email}"
+    }
+    if not email_sent:
+        response["temp_password"] = raw_password
+    return response
+
+@api_router.delete("/owner/managers/{username}")
+async def delete_manager(username: str, current_user: UserResponse = Depends(get_current_user)):
+    """Owner: delete a manager (org_admin) from their tenant."""
+    if current_user.role != "owner":
+        raise HTTPException(status_code=403, detail="Only Owners can delete managers")
+    # Verify the manager belongs to the owner's tenant
+    manager = await db.users.find_one({"username": username, "role": "org_admin", "organization_id": current_user.organization_id})
+    if not manager:
+        raise HTTPException(status_code=404, detail="Manager not found in your organization")
+    await db.users.delete_one({"username": username})
+    return {"message": f"Manager '{manager.get('full_name', username)}' deleted successfully"}
+
 # ============ MACHINERY ROUTES (Public + Protected) ============
 
 @api_router.get("/public/machinery", response_model=List[Machinery])
 async def get_public_machinery():
     """Public endpoint to browse machinery fleet"""
     machinery = await db.machinery.find({"status": {"$in": ["Available", "Booked"]}}, {"_id": 0}).to_list(1000)
+    
+    # Inject company name
+    for machine in machinery:
+        if machine.get("organization_id") and machine["organization_id"] != "default_org":
+            org = await db.organizations.find_one({"organization_id": machine["organization_id"]})
+            if org:
+                machine["company_name"] = org.get("name")
+                
     return machinery
 
 @api_router.post("/public/check-availability")
@@ -1170,6 +1812,28 @@ async def get_machinery(
         return []
 
     machinery = await db.machinery.find(query, {"_id": 0}).to_list(1000)
+    
+    # Inject company name and rating
+    for machine in machinery:
+        if machine.get("organization_id") and machine["organization_id"] != "default_org":
+            org = await db.organizations.find_one({"organization_id": machine["organization_id"]})
+            if org:
+                machine["company_name"] = org.get("name")
+            
+            # Calculate company average rating
+            pipeline = [
+                {"$match": {"organization_id": machine["organization_id"], "status": "Completed", "rating": {"$exists": True, "$ne": None}}},
+                {"$group": {
+                    "_id": None,
+                    "avg_rating": {"$avg": "$rating"}
+                }}
+            ]
+            rating_agg = await db.bookings.aggregate(pipeline).to_list(1)
+            if rating_agg:
+                machine["company_rating"] = round(rating_agg[0]["avg_rating"], 1)
+            else:
+                machine["company_rating"] = None
+
     return machinery
 
 @api_router.post("/machinery", response_model=Machinery)
@@ -1177,12 +1841,19 @@ async def create_machinery(machinery: MachineryCreate, current_user: UserRespons
     if current_user.role not in ["org_admin"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    machinery_data = machinery.model_dump()
+    machinery_data = machinery.model_dump(exclude={"latitude", "longitude"})
     machinery_data["machinery_id"] = generate_id("MCH")
     machinery_data["status"] = "Available"
     machinery_data["total_usage_hours"] = 0.0
     machinery_data["created_at"] = datetime.now(timezone.utc).isoformat()
     machinery_data["organization_id"] = current_user.organization_id
+
+    # Build GeoJSON location from lat/lng if provided
+    if machinery.latitude is not None and machinery.longitude is not None:
+        machinery_data["location"] = {
+            "type": "Point",
+            "coordinates": [machinery.longitude, machinery.latitude]
+        }
     
     await db.machinery.insert_one(machinery_data)
     return Machinery(**machinery_data)
@@ -1309,6 +1980,12 @@ async def get_employees(current_user: UserResponse = Depends(get_current_user)):
 async def create_employee(employee: EmployeeCreate, current_user: UserResponse = Depends(get_current_user)):
     if current_user.role not in ["org_admin"]:
         raise HTTPException(status_code=403, detail="Not authorized")
+        
+    if employee.role == "org_admin":
+        raise HTTPException(status_code=403, detail="Managers cannot create other Managers")
+    if employee.role != "operator":
+        # Force it according to business logic for this frontend panel
+        employee.role = "operator"
     
     employee_data = employee.model_dump()
     employee_data["employee_id"] = generate_id("EMP")
@@ -1338,14 +2015,20 @@ async def update_employee(employee_id: str, employee: EmployeeCreate, current_us
 
 @api_router.delete("/employees/{employee_id}")
 async def delete_employee(employee_id: str, current_user: UserResponse = Depends(get_current_user)):
-    if current_user.role not in ["org_admin"]:
+    if current_user.role not in ["org_admin", "owner"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     
     # STRICT DELETES: Enforce organization_id filter
     result = await db.employees.delete_one({"employee_id": employee_id, "organization_id": current_user.organization_id})
+    await db.users.delete_one({"username": employee_id, "organization_id": current_user.organization_id})
+    
     if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Employee not found or access denied")
-    return {"message": "Employee deleted successfully"}
+        # Check if they just existed in the users collection (e.g., manager)
+        user_check = await db.users.find_one({"username": employee_id, "organization_id": current_user.organization_id})
+        if not user_check:
+            raise HTTPException(status_code=404, detail="Employee not found or access denied")
+            
+    return {"message": "Employee deleted successfully", "id": str(employee_id)}
 
 # ============ BOOKING ROUTES ============
 
@@ -1363,11 +2046,12 @@ async def get_bookings(current_user: UserResponse = Depends(get_current_user)):
     
     # Operators see their assigned bookings
     elif current_user.role == "operator":
+        # Build $or query to match operator_id as either employee_id or username
+        or_conditions = [{"operator_id": current_user.username}]
         employee = await db.employees.find_one({"name": current_user.full_name}, {"_id": 0})
         if employee:
-            query["operator_id"] = employee["employee_id"]
-        else:
-            return [] # Operator not found, return empty
+            or_conditions.append({"operator_id": employee["employee_id"]})
+        query["$or"] = or_conditions
 
     # Org Admins and Owners see only their organization's bookings
     elif current_user.role in ["org_admin", "owner"]:
@@ -1395,6 +2079,13 @@ async def get_bookings(current_user: UserResponse = Depends(get_current_user)):
             operator = await db.employees.find_one({"employee_id": booking["operator_id"]}, {"_id": 0})
             if operator:
                 booking["operator_name"] = operator["name"]
+            else:
+                # Fallback: operator_id might be a username from the users collection
+                op_user = await db.users.find_one({"username": booking["operator_id"]}, {"_id": 0})
+                if op_user:
+                    booking["operator_name"] = op_user.get("full_name", "Unknown Operator")
+                else:
+                    booking["operator_name"] = "Unknown Operator"
     
     return bookings
 
@@ -1482,6 +2173,24 @@ async def update_booking(booking_id: str, booking: BookingUpdate, current_user: 
             {"$set": {"status": "Booked"}}
         )
         booking_data["status"] = "Confirmed"
+
+    # EMERGENCY REJECT: Allow rejecting from Pending, Confirmed, or Approved states
+    if booking_data.get("approval_status") == "Rejected" or booking_data.get("status") == "Rejected":
+        current_status = existing.get("status", "")
+        # Only block reject for already-completed bookings
+        if current_status == "Completed":
+            raise HTTPException(status_code=400, detail="Cannot reject a completed booking")
+        
+        booking_data["status"] = "Rejected"
+        booking_data["approval_status"] = "Rejected"
+        
+        # If the booking was Confirmed/Approved, release the machinery back to Available
+        if current_status in ["Confirmed", "Booked"]:
+            await db.machinery.update_one(
+                {"machinery_id": existing["machinery_id"]},
+                {"$set": {"status": "Available"}}
+            )
+            print(f"[BOOKING] Emergency reject: Released machinery '{existing['machinery_id']}' back to Available")
     
     result = await db.bookings.find_one_and_update(
         {"booking_id": booking_id, "organization_id": current_user.organization_id},
@@ -1490,6 +2199,42 @@ async def update_booking(booking_id: str, booking: BookingUpdate, current_user: 
     )
     if not result:
         raise HTTPException(status_code=404, detail="Booking not found or access denied")
+    result.pop("_id", None)
+    return Booking(**result)
+
+@api_router.put("/bookings/{booking_id}/rate", response_model=Booking)
+async def rate_booking(booking_id: str, update: BookingUpdate, current_user: UserResponse = Depends(get_current_user)):
+    if current_user.role != "farmer":
+        raise HTTPException(status_code=403, detail="Only farmers can rate bookings")
+    
+    rating = update.rating
+    review = update.review
+    
+    if rating is None:
+        raise HTTPException(status_code=400, detail="Rating is required")
+    
+    # Force integer cast
+    try:
+        rating = int(rating)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Rating must be a number")
+    
+    if not (1 <= rating <= 5):
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+        
+    existing = await db.bookings.find_one({"booking_id": booking_id, "farmer_id": current_user.username}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Booking not found or access denied")
+        
+    if existing.get("status") != "Completed":
+        raise HTTPException(status_code=400, detail="Only completed bookings can be rated")
+        
+    result = await db.bookings.find_one_and_update(
+        {"booking_id": booking_id, "farmer_id": current_user.username},
+        {"$set": {"rating": rating, "review": review or ""}},
+        return_document=True
+    )
+    
     result.pop("_id", None)
     return Booking(**result)
 
@@ -2385,14 +3130,35 @@ async def get_dashboard_stats(current_user: UserResponse = Depends(get_current_u
 
     total_employees = await db.employees.count_documents(org_filter)
     
-    return DashboardStats(
-        total_revenue=total_revenue,
-        total_bookings=total_bookings,
-        active_machinery=active_machinery,
-        pending_payments=pending_payments,
-        total_farmers=total_farmers,
-        total_employees=total_employees
-    )
+    # Calculate company rating based on completed bookings
+    average_rating = 0.0
+    total_reviews = 0
+    
+    if current_user.role in ["org_admin", "owner"]:
+        pipeline = [
+            {"$match": {"organization_id": current_user.organization_id, "status": "Completed", "rating": {"$exists": True, "$ne": None}}},
+            {"$group": {
+                "_id": None,
+                "avg_rating": {"$avg": "$rating"},
+                "review_count": {"$sum": 1}
+            }}
+        ]
+        rating_agg = await db.bookings.aggregate(pipeline).to_list(1)
+        if rating_agg:
+            average_rating = round(rating_agg[0]["avg_rating"], 1)
+            total_reviews = rating_agg[0]["review_count"]
+    
+    # Update DashboardStats return (requires model update too)
+    return {
+        "total_revenue": total_revenue,
+        "total_bookings": total_bookings,
+        "active_machinery": active_machinery,
+        "pending_payments": pending_payments,
+        "total_farmers": total_farmers,
+        "total_employees": total_employees,
+        "average_rating": average_rating,
+        "total_reviews": total_reviews
+    }
 
 @api_router.get("/reports/revenue")
 async def get_revenue_report(current_user: UserResponse = Depends(get_current_user)):
@@ -2582,6 +3348,128 @@ async def get_roi_report(current_user: UserResponse = Depends(get_current_user))
             "net_roi": org_total_revenue - org_total_maintenance - org_total_diesel - org_total_wages
         }
     }
+
+# ============ ADVANCED REPORTS (DATE-FILTERED BI) ============
+
+@api_router.get("/reports/financial")
+async def get_financial_report(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """
+    Financial summary: total revenue, maintenance costs, wages paid, and net profit.
+    Accepts optional ISO-date strings (YYYY-MM-DD) for date filtering.
+    """
+    if current_user.role not in ["org_admin", "owner", "super_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    org_filter = {}
+    if current_user.role in ["org_admin", "owner"]:
+        org_filter["organization_id"] = current_user.organization_id
+
+    # ── Build date range predicate ──────────────────────────────────
+    date_match = {}
+    if start_date:
+        date_match["$gte"] = start_date
+    if end_date:
+        # Include the full end day by appending T23:59:59
+        date_match["$lte"] = end_date + "T23:59:59"
+
+    # ── Revenue from paid invoices ──────────────────────────────────
+    inv_query = {**org_filter, "payment_status": "Paid"}
+    if date_match:
+        inv_query["generated_at"] = date_match
+    invoices = await db.invoices.find(inv_query, {"_id": 0, "amount": 1}).to_list(5000)
+    total_revenue = sum(inv.get("amount", 0) for inv in invoices)
+
+    # ── Maintenance costs ───────────────────────────────────────────
+    maint_query = {**org_filter}
+    if date_match:
+        maint_query["created_at"] = date_match
+    maint_records = await db.maintenance.find(maint_query, {"_id": 0, "total_cost": 1}).to_list(5000)
+    total_maintenance_costs = sum(rec.get("total_cost", 0) for rec in maint_records)
+
+    # ── Wages paid ──────────────────────────────────────────────────
+    wage_query = {**org_filter}
+    if date_match:
+        wage_query["created_at"] = date_match
+    wages = await db.wages.find(wage_query, {"_id": 0, "wage_amount": 1}).to_list(5000)
+    total_wages_paid = sum(w.get("wage_amount", 0) for w in wages)
+
+    net_profit = total_revenue - total_maintenance_costs - total_wages_paid
+
+    return {
+        "total_revenue": total_revenue,
+        "total_maintenance_costs": total_maintenance_costs,
+        "total_wages_paid": total_wages_paid,
+        "net_profit": net_profit,
+    }
+
+
+@api_router.get("/reports/utilization-detail")
+async def get_utilization_detail(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """
+    Fleet utilization: completed bookings grouped by machine with job count
+    and total revenue per machine, sorted by number of jobs desc.
+    """
+    if current_user.role not in ["org_admin", "owner", "super_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    booking_match = {"status": "Completed"}
+    if current_user.role in ["org_admin", "owner"]:
+        booking_match["organization_id"] = current_user.organization_id
+
+    if start_date or end_date:
+        date_cond = {}
+        if start_date:
+            date_cond["$gte"] = start_date
+        if end_date:
+            date_cond["$lte"] = end_date + "T23:59:59"
+        booking_match["booking_date"] = date_cond
+
+    # Aggregate bookings → group by machinery_id → lookup machine name → sort
+    pipeline = [
+        {"$match": booking_match},
+        {"$group": {
+            "_id": "$machinery_id",
+            "total_jobs": {"$sum": 1},
+        }},
+        {"$lookup": {
+            "from": "machinery",
+            "localField": "_id",
+            "foreignField": "machinery_id",
+            "as": "machine_info",
+        }},
+        {"$unwind": {"path": "$machine_info", "preserveNullAndEmptyArrays": True}},
+        {"$project": {
+            "_id": 0,
+            "machinery_id": "$_id",
+            "machine_name": {"$ifNull": ["$machine_info.machine_type", "Unknown"]},
+            "total_jobs": 1,
+        }},
+        {"$sort": {"total_jobs": -1}},
+    ]
+
+    results = await db.bookings.aggregate(pipeline).to_list(500)
+
+    # Enrich each machine result with revenue from paid invoices
+    for item in results:
+        m_id = item["machinery_id"]
+        # Find booking_ids for this machine that matched our filter
+        b_query = {**booking_match, "machinery_id": m_id}
+        bookings = await db.bookings.find(b_query, {"_id": 0, "booking_id": 1}).to_list(5000)
+        booking_ids = [b["booking_id"] for b in bookings]
+
+        inv_query_inner = {"booking_id": {"$in": booking_ids}, "payment_status": "Paid"}
+        invoices = await db.invoices.find(inv_query_inner, {"_id": 0, "amount": 1}).to_list(5000)
+        item["total_revenue"] = sum(inv.get("amount", 0) for inv in invoices)
+
+    return results
 
 app.include_router(api_router)
 

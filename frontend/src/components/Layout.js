@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import api from '../api/axios';
 import {
   LayoutDashboard, Users, Tractor, UserCircle, FileText,
   CreditCard, Wrench, DollarSign, BarChart3, LogOut, Menu, X, Shield, UserCog
@@ -32,6 +33,8 @@ export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
 
   const filteredNavigation = navigation.filter(item =>
     item.roles.includes(user?.role)
@@ -42,8 +45,50 @@ export default function Layout() {
     navigate('/login');
   };
 
+  const handleChangePassword = async () => {
+    if (newPassword.length < 6) {
+      alert('Password must be at least 6 characters');
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      await api.put('/users/change-password', { new_password: newPassword });
+      window.location.reload();
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Failed to change password');
+      setChangingPassword(false);
+    }
+  };
+
   return (
     <div className="flex h-screen bg-muted">
+      {/* Forced Password Reset Modal — un-closable */}
+      {user?.must_change_password && (
+        <div className="fixed inset-0 bg-gray-900/80 flex items-center justify-center z-50">
+          <div className="bg-white p-8 rounded-xl shadow-2xl w-96 max-w-[90vw]">
+            <div className="flex items-center gap-2 mb-2">
+              <Shield className="h-6 w-6 text-green-600" />
+              <h2 className="text-xl font-bold text-gray-900">Security Requirement</h2>
+            </div>
+            <p className="text-sm text-gray-600 mb-6">Your account was created with a temporary password. Please set a new password to continue using AgriGear ERP.</p>
+            <input
+              type="password"
+              placeholder="New Password (min. 6 characters)"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full p-3 border border-gray-300 rounded-lg mb-4 text-sm focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none"
+              autoFocus
+            />
+            <button
+              onClick={handleChangePassword}
+              disabled={changingPassword}
+              className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-semibold py-3 rounded-lg transition-colors text-sm"
+            >
+              {changingPassword ? 'Updating...' : 'Update Password & Continue'}
+            </button>
+          </div>
+        </div>
+      )}
       {/* Sidebar - Desktop */}
       <div className="hidden md:flex md:flex-col md:w-64 bg-primary text-primary-foreground">
         <div className="flex items-center justify-center h-16 border-b border-white/10">
@@ -72,6 +117,11 @@ export default function Layout() {
           <div className="text-sm mb-3">
             <div className="font-medium">{user?.full_name}</div>
             <div className="text-xs opacity-80 capitalize">{user?.role}</div>
+            {user?.company_name && ['owner', 'org_admin', 'operator'].includes(user?.role?.toLowerCase()) && (
+              <span className="ml-3 px-2 py-1 bg-green-100 text-green-800 text-xs font-bold rounded border border-green-300">
+                🏢 {user.company_name}
+              </span>
+            )}
           </div>
           <Button
             onClick={handleLogout}
@@ -132,8 +182,13 @@ export default function Layout() {
             <Menu className="h-6 w-6" />
           </button>
           <div className="flex-1" />
-          <div className="text-sm text-muted-foreground">
-            Welcome, <span className="font-medium text-foreground">{user?.full_name}</span>
+          <div className="text-sm text-muted-foreground flex items-center">
+            Welcome, <span className="font-medium text-foreground ml-1 mr-2">{user?.full_name}</span>
+            {user?.company_name && ['owner', 'org_admin', 'operator'].includes(user?.role?.toLowerCase()) && (
+              <span className="ml-3 px-2 py-1 bg-green-100 text-green-800 text-xs font-bold rounded border border-green-300">
+                🏢 {user.company_name}
+              </span>
+            )}
           </div>
         </header>
 
