@@ -76,7 +76,11 @@ export default function SuperAdminDashboard() {
     };
 
     const handleApprove = async (username) => {
-        try { await api.post(`/admin/users/${username}/approve`); toast.success(`${username} approved`); fetchAll(); }
+        try {
+            await api.post(`/admin/users/${username}/approve`);
+            toast.success("User Approved! An email has been sent with their credentials.");
+            fetchAll();
+        }
         catch { toast.error('Failed to approve'); }
     };
 

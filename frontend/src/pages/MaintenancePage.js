@@ -105,6 +105,7 @@ export default function MaintenancePage() {
   // Complete job dialog (to enter labor charge)
   const [completeDialogOpen, setCompleteDialogOpen] = useState(false);
   const [completeJobId, setCompleteJobId] = useState(null);
+  const [completeRecord, setCompleteRecord] = useState(null);
   const [laborCharge, setLaborCharge] = useState('');
 
   // ── Data fetching ─────────────────────────────────────────────────────────
@@ -186,15 +187,23 @@ export default function MaintenancePage() {
   };
 
   const handleCompleteJob = (id) => {
+    const record = records.find(r => r.maintenance_id === id);
     setCompleteJobId(id);
+    setCompleteRecord(record || null);
     setLaborCharge('');
     setCompleteDialogOpen(true);
   };
 
+  // Auto-calculate approved spare parts cost from the record
+  const approvedPartsCost = completeRecord?.spare_parts
+    ?.filter(p => p.status === 'approved' || p.status === 'provided')
+    .reduce((sum, p) => sum + (p.cost || p.estimated_cost || 0), 0) || 0;
+
   const submitCompleteJob = async () => {
     try {
       await api.put(`/maintenance/${completeJobId}/complete`, {
-        labor_charge: parseFloat(laborCharge) || 0
+        labor_charge: parseFloat(laborCharge) || 0,
+        spare_parts_cost: approvedPartsCost
       });
       toast.success('Job marked as completed ✅');
       setCompleteDialogOpen(false);
@@ -334,6 +343,7 @@ export default function MaintenancePage() {
     pending_assignment: 'bg-yellow-100 text-yellow-700',
     pending: 'bg-orange-100 text-orange-700',
     rejected: 'bg-red-100 text-red-700',
+    reported: 'bg-amber-100 text-amber-700',
   };
 
   const STATUS_LABEL = {
@@ -343,6 +353,7 @@ export default function MaintenancePage() {
     completed: 'Completed',
     pending: 'Pending',
     rejected: 'Mechanic Rejected — Reassign',
+    reported: 'Reported — Awaiting Assignment',
   };
 
   const statusLabel = (s) => STATUS_LABEL[s] || (s || 'pending').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
@@ -533,11 +544,21 @@ export default function MaintenancePage() {
                             <Button size="sm" variant="ghost" className="text-red-500" onClick={() => handleRejectJob(record.maintenance_id)}>Reject</Button>
                           </>
                         )}
-                        {/* Mechanic: complete */}
+                        {/* Mechanic: complete (ONLY for in_progress) */}
                         {isMechanic && record.status === 'in_progress' && (
                           <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={() => handleCompleteJob(record.maintenance_id)}>
                             <CheckCircle className="h-4 w-4 mr-1" /> Complete
                           </Button>
+                        )}
+                        {/* Manager: force-complete (ONLY for in_progress) */}
+                        {isOrgAdmin && record.status === 'in_progress' && (
+                          <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => handleCompleteJob(record.maintenance_id)}>
+                            <CheckCircle className="h-4 w-4 mr-1" /> Complete
+                          </Button>
+                        )}
+                        {/* Reported status: awaiting assignment label */}
+                        {record.status === 'reported' && (
+                          <span className="text-amber-600 text-xs font-medium italic">Awaiting Assignment</span>
                         )}
                         {/* Mechanic: request parts */}
                         {isMechanic && record.status === 'in_progress' && (
@@ -545,8 +566,8 @@ export default function MaintenancePage() {
                             Parts
                           </Button>
                         )}
-                        {/* Manager: assign or reassign — also shows for rejected */}
-                        {isOrgAdmin && (isPendingAssignment || record.status === 'pending' || record.status === 'rejected') && (
+                        {/* Manager: assign or reassign — also shows for rejected and reported */}
+                        {isOrgAdmin && (isPendingAssignment || record.status === 'pending' || record.status === 'rejected' || record.status === 'reported') && (
                           <Button size="sm" variant="outline" onClick={() => openAssignDialog(record)}>
                             <UserPlus className="h-4 w-4 mr-1" />
                             {record.mechanic_id && record.mechanic_id !== 'unassigned' ? 'Reassign' : 'Assign'}
@@ -607,6 +628,43 @@ export default function MaintenancePage() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Location Overview Map — shows selected machine + available mechanics */}
+            {formData.machinery_id && (() => {
+              const selectedMach = machinery.find(m => m.machinery_id === formData.machinery_id);
+              const machLoc = selectedMach?.location?.coordinates;
+              const centerLat = machLoc ? parseFloat(machLoc[1]) : 11.0168;
+              const centerLng = machLoc ? parseFloat(machLoc[0]) : 76.9558;
+              const validCenter = !isNaN(centerLat) && !isNaN(centerLng);
+              const mechanicsWithCoords = (mechanics || []).filter(m => {
+                const lat = Number(m.lat); const lng = Number(m.lng);
+                return !isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0;
+              });
+              return (
+                <div>
+                  <Label className="mb-1 block">Location: Machine vs Mechanics</Label>
+                  <div style={{ height: '250px', width: '100%' }} className="rounded-lg overflow-hidden border border-border relative">
+                    <MapContainer center={[centerLat, centerLng]} zoom={11} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }}>
+                      <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                      {validCenter && machLoc && (
+                        <Marker position={[centerLat, centerLng]} icon={redIcon}>
+                          <Popup><strong>🔴 {selectedMach?.machine_type}</strong></Popup>
+                        </Marker>
+                      )}
+                      {mechanicsWithCoords.map(m => (
+                        <Marker key={m.username} position={[Number(m.lat), Number(m.lng)]} icon={blueIcon}>
+                          <Popup><strong>🔵 {m.full_name}</strong><br />@{m.username}</Popup>
+                        </Marker>
+                      ))}
+                    </MapContainer>
+                    {!machLoc && (
+                      <div className="absolute top-2 left-2 bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded z-10">Machine location not set</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
             <div>
               <Label>Assign Mechanic (optional)</Label>
               <Select value={formData.mechanic_id} onValueChange={(v) => setFormData({ ...formData, mechanic_id: v })}>
@@ -655,7 +713,7 @@ export default function MaintenancePage() {
             });
 
             return (
-              <div className="h-56 w-full rounded-lg overflow-hidden border border-border mb-4 z-0 relative">
+              <div style={{ height: '300px', width: '100%' }} className="rounded-lg overflow-hidden border border-border mb-4 relative" data-testid="assign-map">
                 <MapContainer center={[centerLat, centerLng]} zoom={12} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }}>
                   <TileLayer
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -760,7 +818,7 @@ export default function MaintenancePage() {
       {/* ── Mechanic: Complete Job ── */}
       <Dialog open={completeDialogOpen} onOpenChange={setCompleteDialogOpen}>
         <DialogContent data-testid="complete-job-dialog">
-          <DialogHeader><DialogTitle>Complete Job — Enter Labor Charge</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>Complete Job — Enter Costs</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div>
               <Label>Labor Charge (₹) *</Label>
@@ -772,7 +830,35 @@ export default function MaintenancePage() {
                 onChange={(e) => setLaborCharge(e.target.value)}
                 autoFocus
               />
-              <p className="text-xs text-muted-foreground mt-1">This amount will be recorded as your wages for this job.</p>
+              <p className="text-xs text-muted-foreground mt-1">Your charge for the repair work performed.</p>
+            </div>
+            <div>
+              <Label>Spare Parts Cost (₹) — auto-calculated</Label>
+              <input
+                type="number"
+                step="0.01"
+                value={approvedPartsCost}
+                readOnly
+                tabIndex={-1}
+                className="w-full p-2 border border-input rounded-md bg-gray-100 cursor-not-allowed text-gray-500 font-mono text-sm"
+                title="This is automatically calculated from approved parts. You cannot edit this value."
+              />
+              <p className="text-xs text-muted-foreground mt-1">This is auto-calculated from your approved spare parts requests. You cannot edit this value.</p>
+            </div>
+            {/* Total Cost Preview */}
+            <div className="bg-muted/30 border border-border rounded-lg p-4">
+              <div className="flex justify-between items-center text-sm">
+                <span className="text-muted-foreground">Labor Charge</span>
+                <span className="font-mono">₹{(parseFloat(laborCharge) || 0).toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between items-center text-sm mt-1">
+                <span className="text-muted-foreground">Spare Parts (approved)</span>
+                <span className="font-mono">₹{approvedPartsCost.toLocaleString()}</span>
+              </div>
+              <div className="border-t border-border mt-2 pt-2 flex justify-between items-center">
+                <span className="font-semibold text-foreground">Total Cost</span>
+                <span className="font-bold font-mono text-lg text-foreground">₹{((parseFloat(laborCharge) || 0) + approvedPartsCost).toLocaleString()}</span>
+              </div>
             </div>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => setCompleteDialogOpen(false)}>Cancel</Button>

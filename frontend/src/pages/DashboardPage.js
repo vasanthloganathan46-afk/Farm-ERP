@@ -3,7 +3,7 @@ import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 import {
   DollarSign, FileText, Tractor, AlertCircle,
-  Users, UserCircle, TrendingUp, Clock, BarChart3, PieChart, Trash2, Star
+  Users, UserCircle, TrendingUp, Clock, BarChart3, PieChart, Trash2, Star, Wrench
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -148,6 +148,13 @@ export default function DashboardPage() {
       icon: UserCircle,
       color: 'text-indigo-600',
       bgColor: 'bg-indigo-50'
+    },
+    {
+      title: 'Total Spare Parts',
+      value: `₹${stats?.total_spare_parts_cost?.toLocaleString() || 0}`,
+      icon: Wrench,
+      color: 'text-orange-600',
+      bgColor: 'bg-orange-50'
     },
     {
       title: 'Company Rating',

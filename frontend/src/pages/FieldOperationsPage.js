@@ -137,11 +137,15 @@ export default function FieldOperationsPage() {
                   )}
                   <Button
                     onClick={() => handleCompleteJob(booking)}
-                    className="w-full mt-4"
+                    disabled={booking.status === 'Paused' || machineUnderMaintenance}
+                    className={`w-full mt-4 ${booking.status === 'Paused' || machineUnderMaintenance
+                        ? 'bg-gray-400 cursor-not-allowed hover:bg-gray-400'
+                        : ''
+                      }`}
                     data-testid={`complete-job-${booking.booking_id}`}
                   >
                     <CheckCircle className="h-4 w-4 mr-2" />
-                    Complete Job
+                    {booking.status === 'Paused' ? 'Job Paused (Maintenance)' : 'Complete Job'}
                   </Button>
 
                   {/* Breakdown button — disabled if machine already under maintenance */}

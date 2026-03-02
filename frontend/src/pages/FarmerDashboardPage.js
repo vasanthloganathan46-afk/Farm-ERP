@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import api from '../api/axios';
 import { useAuth } from '../context/AuthContext';
 import { Button } from '../components/ui/button';
-import { Tractor, Calendar, FileText, CreditCard, CheckCircle, Clock } from 'lucide-react';
+import { Tractor, Calendar, FileText, CreditCard, CheckCircle, Clock, DollarSign } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function FarmerDashboardPage() {
@@ -39,6 +39,8 @@ export default function FarmerDashboardPage() {
   const confirmedBookings = bookings.filter(b => b.status === 'Confirmed');
   const completedBookings = bookings.filter(b => b.status === 'Completed');
   const pendingInvoices = invoices.filter(i => i.payment_status !== 'Paid');
+  const paidInvoices = invoices.filter(i => i.payment_status === 'Paid');
+  const totalSpent = paidInvoices.reduce((sum, inv) => sum + (inv.amount || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -64,7 +66,19 @@ export default function FarmerDashboardPage() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
+        {/* Total Spent */}
+        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-blue-50 to-indigo-100 border border-blue-200 p-6 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-blue-700 font-medium">Total Spent</p>
+              <p className="text-3xl font-bold font-mono text-blue-800 mt-2">₹{totalSpent.toLocaleString()}</p>
+            </div>
+            <div className="bg-blue-200 text-blue-700 p-3 rounded-lg">
+              <DollarSign className="h-6 w-6" />
+            </div>
+          </div>
+        </div>
         <div className="bg-card border border-border p-6 rounded-xl shadow-sm">
           <div className="flex items-center justify-between">
             <div>
@@ -137,11 +151,10 @@ export default function FarmerDashboardPage() {
                     <p className="text-sm text-muted-foreground mt-1">{booking.field_location}</p>
                     <p className="text-xs font-mono text-muted-foreground mt-1">{new Date(booking.booking_date).toLocaleDateString()}</p>
                   </div>
-                  <span className={`text-xs px-3 py-1.5 rounded-full font-semibold ${
-                    booking.status === 'Completed' ? 'bg-green-100 text-green-700' :
-                    booking.status === 'Confirmed' ? 'bg-blue-100 text-blue-700' :
-                    'bg-yellow-100 text-yellow-700'
-                  }`}>
+                  <span className={`text-xs px-3 py-1.5 rounded-full font-semibold ${booking.status === 'Completed' ? 'bg-green-100 text-green-700' :
+                      booking.status === 'Confirmed' ? 'bg-blue-100 text-blue-700' :
+                        'bg-yellow-100 text-yellow-700'
+                    }`}>
                     {booking.status}
                   </span>
                 </div>

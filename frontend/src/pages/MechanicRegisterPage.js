@@ -5,11 +5,25 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { toast } from 'sonner';
-import { Wrench, UserPlus } from 'lucide-react';
+import { Wrench, UserPlus, MapPin } from 'lucide-react';
+import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+import icon from 'leaflet/dist/images/marker-icon.png';
+import iconShadow from 'leaflet/dist/images/marker-shadow.png';
+let DefaultIcon = L.icon({ iconUrl: icon, shadowUrl: iconShadow, iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41] });
+L.Marker.prototype.options.icon = DefaultIcon;
+
+function MapClickHandler({ onLocationSelect }) {
+    useMapEvents({
+        click(e) { onLocationSelect(e.latlng.lat, e.latlng.lng); }
+    });
+    return null;
+}
 
 export default function MechanicRegisterPage() {
     const [formData, setFormData] = useState({
-        full_name: '', email: '', phone: '', password: '', confirmPassword: '', skills: '', hourly_rate: ''
+        full_name: '', email: '', phone: '', skills: '', hourly_rate: '', latitude: null, longitude: null
     });
     const [loading, setLoading] = useState(false);
     const [registered, setRegistered] = useState(null); // { username }
@@ -19,25 +33,20 @@ export default function MechanicRegisterPage() {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (formData.password !== formData.confirmPassword) {
-            toast.error('Passwords do not match');
-            return;
-        }
-        if (formData.password.length < 6) {
-            toast.error('Password must be at least 6 characters');
-            return;
-        }
         setLoading(true);
         try {
             const res = await api.post('/auth/register-mechanic', {
                 full_name: formData.full_name,
                 email: formData.email,
                 phone: formData.phone,
-                password: formData.password,
                 skills: formData.skills,
-                hourly_rate: parseFloat(formData.hourly_rate)
+                hourly_rate: parseFloat(formData.hourly_rate),
+                latitude: formData.latitude,
+                longitude: formData.longitude
             });
-            setRegistered({ username: res.data.username });
+            setRegistered({
+                username: res.data.username
+            });
         } catch (error) {
             toast.error(error.response?.data?.detail || 'Registration failed');
         } finally {
@@ -55,10 +64,11 @@ export default function MechanicRegisterPage() {
                         </div>
                     </div>
                     <h2 className="text-2xl font-bold font-heading text-foreground">Application Submitted!</h2>
-                    <p className="text-muted-foreground">Your mechanic account is <strong>pending approval</strong> by the Super Admin. You'll be able to log in once approved.</p>
-                    <div className="bg-muted rounded-lg p-4">
+                    <p className="text-muted-foreground">Your mechanic account is <strong>pending approval</strong> by the Super Admin. You will receive your login credentials once approved.</p>
+                    <div className="bg-muted rounded-lg p-4 space-y-2">
+                        <p className="text-sm text-muted-foreground">Your Username</p>
                         <p className="text-lg font-mono font-bold text-foreground">{registered.username}</p>
-                        <p className="text-xs text-muted-foreground mt-1">Save your username — you'll need it to log in after approval</p>
+                        <p className="text-xs text-muted-foreground mt-2">Save your username — you'll need it to log in after approval.</p>
                     </div>
                     <Button className="w-full" onClick={() => navigate('/login')}>
                         Go to Login
@@ -139,15 +149,23 @@ export default function MechanicRegisterPage() {
                             />
                         </div>
 
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <Label htmlFor="password">Password *</Label>
-                                <Input id="password" type="password" value={formData.password} onChange={update('password')} required placeholder="Min 6 characters" />
+                        {/* Location Map */}
+                        <div>
+                            <Label className="flex items-center gap-1">
+                                <MapPin className="h-3.5 w-3.5" /> Your Location (click map to set pin)
+                            </Label>
+                            <div className="h-52 w-full rounded-lg overflow-hidden border border-input mt-1">
+                                <MapContainer center={[11.0168, 76.9558]} zoom={10} scrollWheelZoom={true} style={{ height: '100%', width: '100%' }}>
+                                    <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                                    <MapClickHandler onLocationSelect={(lat, lng) => setFormData({ ...formData, latitude: lat, longitude: lng })} />
+                                    {formData.latitude && formData.longitude && (
+                                        <Marker position={[formData.latitude, formData.longitude]} />
+                                    )}
+                                </MapContainer>
                             </div>
-                            <div>
-                                <Label htmlFor="confirmPassword">Confirm *</Label>
-                                <Input id="confirmPassword" type="password" value={formData.confirmPassword} onChange={update('confirmPassword')} required placeholder="Repeat password" />
-                            </div>
+                            {formData.latitude && (
+                                <p className="text-xs text-muted-foreground mt-1">📍 {formData.latitude.toFixed(4)}, {formData.longitude.toFixed(4)}</p>
+                            )}
                         </div>
 
                         <Button type="submit" className="w-full" disabled={loading} data-testid="mechanic-register-button">

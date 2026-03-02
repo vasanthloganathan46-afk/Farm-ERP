@@ -110,7 +110,7 @@ export default function WagesPage() {
       </div>
 
       {/* Run Manager Payroll Button */}
-      {(user?.role === 'owner' || user?.role === 'org_admin') && (
+      {user?.role === 'owner' && (
         <div className="flex justify-end">
           <Button
             onClick={async () => {

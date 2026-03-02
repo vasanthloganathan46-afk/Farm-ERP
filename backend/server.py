@@ -66,7 +66,7 @@ class FarmerRegister(BaseModel):
     full_name: str
     email: EmailStr
     phone: str
-    password: str
+    password: Optional[str] = None
     village: str
     land_size: float
 
@@ -76,6 +76,7 @@ class UserCreate(BaseModel):
     role: str
     email: str
     password: str
+    monthly_salary: Optional[float] = 0.0
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -88,9 +89,11 @@ class MechanicRegister(BaseModel):
     full_name: str
     email: EmailStr
     phone: str
-    password: str
+    password: Optional[str] = None
     skills: str  # e.g. "Tractor repair, hydraulics, welding"
     hourly_rate: float
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 class SuspendUserRequest(BaseModel):
     suspension_reason: str
@@ -135,9 +138,9 @@ class UserResponse(BaseModel):
     company_name: Optional[str] = None
     tenant_name: Optional[str] = None
     tenant_id: Optional[str] = None
-    monthly_salary: Optional[float] = None
+    monthly_salary: Optional[float] = 0.0
     must_change_password: Optional[bool] = False
-    hourly_wage: Optional[float] = None
+    hourly_wage: Optional[float] = 0.0
 
 class OperatorCreate(BaseModel):
     username: str
@@ -210,6 +213,8 @@ class Employee(BaseModel):
     skill: str
     joining_date: str
     wage_rate: float
+    monthly_salary: Optional[float] = 0.0
+    hourly_wage: Optional[float] = 0.0
     created_at: str
     organization_id: str = "default_org"
 
@@ -399,6 +404,7 @@ class MaintenanceAssign(BaseModel):
 
 class CompleteJobRequest(BaseModel):
     labor_charge: float = 0.0
+    spare_parts_cost: float = 0.0
     notes: Optional[str] = None
 
 class DashboardStats(BaseModel):
@@ -410,6 +416,7 @@ class DashboardStats(BaseModel):
     total_employees: int
     average_rating: Optional[float] = 0.0
     total_reviews: Optional[int] = 0
+    total_spare_parts_cost: Optional[float] = 0.0
 
 class AvailabilityCheck(BaseModel):
     machinery_id: str
@@ -517,26 +524,29 @@ async def register_farmer(farmer_data: FarmerRegister):
     
     # Generate username from email
     username = farmer_data.email.split('@')[0] + str(random.randint(1000, 9999))
-    
-    # Create user
+
+    # NO password at registration — credentials generated only on admin approval
     user_data = {
         "username": username,
         "full_name": farmer_data.full_name,
         "role": "farmer",
         "email": farmer_data.email,
         "phone": farmer_data.phone,
-        "password_hash": hash_password(farmer_data.password),
+        "password_hash": None,
         "organization_id": None,
         "village": farmer_data.village,
         "land_size": farmer_data.land_size,
+        "must_change_password": True,
         "status": "Pending",
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     
     await db.users.insert_one(user_data)
     
-    # Do not return token, requiring admin approval first
-    return {"message": "Registration successful. Please wait for admin approval."}
+    return {
+        "message": "Registration submitted successfully. Your account is pending admin approval.",
+        "username": username
+    }
 
 @api_router.post("/auth/login", response_model=LoginResponse)
 async def login(request: LoginRequest):
@@ -634,19 +644,36 @@ async def get_pending_users(current_user: UserResponse = Depends(get_current_use
     return users
 
 @api_router.post("/admin/users/{username}/approve")
-async def approve_user(username: str, current_user: UserResponse = Depends(get_current_user)):
-    if current_user.role != "super_admin":
-        raise HTTPException(status_code=403, detail="Only Super Admin can approve users")
-    
-    result = await db.users.update_one(
-        {"username": username},
-        {"$set": {"status": "Active"}}
-    )
-    
-    if result.modified_count == 0:
+async def approve_user(username: str, background_tasks: BackgroundTasks, current_user: UserResponse = Depends(get_current_user)):
+    if current_user.role not in ["super_admin", "owner", "org_admin"]:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    user = await db.users.find_one({"username": username})
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
-        
-    return {"message": f"User {username} approved successfully"}
+
+    # Generate credentials at approval time (deferred credential workflow)
+    temp_password = secrets.token_urlsafe(10)
+
+    await db.users.update_one(
+        {"username": username},
+        {"$set": {
+            "status": "Active",
+            "password_hash": hash_password(temp_password),
+            "must_change_password": True
+        }}
+    )
+
+    # Queue the email so the API responds instantly
+    from utils.email import send_approval_email
+    background_tasks.add_task(
+        send_approval_email,
+        user.get("email"),
+        user.get("full_name", username),
+        temp_password
+    )
+
+    return {"message": f"User {username} approved and email sent."}
 
 @api_router.get("/admin/users", response_model=List[UserResponse])
 async def get_all_users(role: Optional[str] = None, current_user: UserResponse = Depends(get_current_user)):
@@ -1129,6 +1156,14 @@ async def get_report_details(report_type: str, current_user: UserResponse = Depe
         raise HTTPException(status_code=403, detail="Not authorized")
     org_id = current_user.organization_id
 
+    # Keys to strip from response dicts (raw IDs leak into frontend tables)
+    RAW_ID_KEYS = {
+        "machinery_id", "machine_id", "employee_id", "user_id",
+        "farmer_id", "booking_id", "operator_id", "organization_id",
+        "wage_id", "maintenance_id", "invoice_id", "log_id",
+        "_id", "tenant_id", "password_hash"
+    }
+
     if report_type == "revenue":
         bookings = await db.bookings.find(
             {"organization_id": org_id, "status": "Completed"},
@@ -1142,8 +1177,8 @@ async def get_report_details(report_type: str, current_user: UserResponse = Depe
             rate = mach.get("rate_per_hour", 0) if mach else 0
             result.append({
                 "date": b.get("booking_date", ""),
-                "machine": mach.get("machine_type", "N/A") if mach else "N/A",
-                "farmer": farmer.get("full_name", "N/A") if farmer else "N/A",
+                "machine": mach.get("machine_type", "Unknown") if mach else "Unknown",
+                "farmer": farmer.get("full_name", "Unknown") if farmer else "Unknown",
                 "hours": hours,
                 "amount": round(hours * rate, 2)
             })
@@ -1156,10 +1191,23 @@ async def get_report_details(report_type: str, current_user: UserResponse = Depe
         ).to_list(500)
         result = []
         for f in fuel_logs:
-            mach = await db.machinery.find_one({"machinery_id": f.get("machinery_id")}, {"_id": 0})
+            machine_name = "Unknown Machine"
+            m_id = f.get("machinery_id") or f.get("machine_id") or f.get("equipment_id")
+            if m_id:
+                try:
+                    # Try string-based machinery_id first
+                    mach = await db.machinery.find_one({"machinery_id": m_id}, {"_id": 0})
+                    if not mach:
+                        # Fallback: try as ObjectId on _id
+                        from bson import ObjectId as BsonObjectId
+                        mach = await db.machinery.find_one({"_id": BsonObjectId(str(m_id))})
+                    if mach:
+                        machine_name = mach.get("machine_type") or mach.get("name") or mach.get("model") or "Unknown Machine"
+                except Exception:
+                    machine_name = str(m_id)
             result.append({
                 "date": f.get("date", ""),
-                "machine": mach.get("machine_type", "N/A") if mach else "N/A",
+                "machine": machine_name,
                 "liters": f.get("liters", 0),
                 "cost_per_liter": f.get("cost_per_liter", 0),
                 "total_cost": round(f.get("total_cost", 0), 2)
@@ -1173,21 +1221,36 @@ async def get_report_details(report_type: str, current_user: UserResponse = Depe
         ).to_list(500)
         result = []
         for w in wages:
-            # Resolve employee name from users collection if missing
+            # Resolve employee name — try multiple strategies
             emp_name = w.get("employee_name")
-            if not emp_name or emp_name == "N/A":
+            if not emp_name or emp_name in ("N/A", "Unknown"):
                 uid = w.get("employee_id") or w.get("operator_id") or w.get("user_id")
                 if uid:
-                    emp = await db.users.find_one({"username": uid}, {"_id": 0})
-                    if not emp:
-                        emp = await db.users.find_one({"email": uid}, {"_id": 0})
-                    emp_name = emp.get("full_name", uid) if emp else uid
+                    try:
+                        # Strategy 1: lookup by username
+                        emp = await db.users.find_one({"username": uid}, {"_id": 0})
+                        # Strategy 2: lookup by email
+                        if not emp:
+                            emp = await db.users.find_one({"email": uid}, {"_id": 0})
+                        # Strategy 3: lookup in employees collection by employee_id
+                        if not emp:
+                            emp = await db.employees.find_one({"employee_id": uid}, {"_id": 0})
+                        # Strategy 4: try ObjectId lookup
+                        if not emp:
+                            try:
+                                from bson import ObjectId as BsonObjectId
+                                emp = await db.users.find_one({"_id": BsonObjectId(str(uid))})
+                            except Exception:
+                                pass
+                        emp_name = emp.get("full_name") or emp.get("name") or uid if emp else uid
+                    except Exception:
+                        emp_name = str(uid)
             result.append({
                 "date": w.get("date", w.get("created_at", "")),
-                "employee": emp_name or "N/A",
-                "role": w.get("employee_role", w.get("role", "N/A")),
+                "employee": emp_name or "Unknown",
+                "role": w.get("employee_role", w.get("role", "Unknown")),
                 "amount": round(w.get("wage_amount", w.get("amount", 0)), 2),
-                "status": w.get("payment_status", w.get("status", "N/A"))
+                "status": w.get("payment_status", w.get("status", "Unknown"))
             })
         return result
 
@@ -1199,14 +1262,55 @@ async def get_report_details(report_type: str, current_user: UserResponse = Depe
         result = []
         for m in records:
             mach = await db.machinery.find_one({"machinery_id": m.get("machinery_id")}, {"_id": 0})
+            # Resolve mechanic name from users collection
+            mechanic_name = m.get("mechanic_name")
+            if not mechanic_name or mechanic_name == "N/A":
+                mid = m.get("mechanic_id")
+                if mid and mid != "unassigned":
+                    mech_user = await db.users.find_one({"username": mid}, {"_id": 0})
+                    mechanic_name = mech_user.get("full_name", mid) if mech_user else mid
+                else:
+                    mechanic_name = "Unassigned"
             result.append({
                 "date": m.get("created_at", ""),
-                "machine": mach.get("machine_type", "N/A") if mach else "N/A",
-                "issue": m.get("issue_description", m.get("description", "N/A")),
-                "mechanic": m.get("mechanic_name", "N/A"),
-                "cost": round(m.get("cost", 0), 2),
-                "status": m.get("status", "N/A")
+                "machine": mach.get("machine_type", "Unknown") if mach else "Unknown",
+                "issue": m.get("service_type") or m.get("notes") or "Routine Maintenance",
+                "mechanic": mechanic_name,
+                "labor_charge": round(m.get("labor_cost", 0), 2),
+                "spare_parts": round(m.get("spare_parts_cost", 0), 2),
+                "total_cost": round(m.get("total_cost", 0), 2),
+                "status": m.get("status", "Unknown")
             })
+        return result
+
+    elif report_type == "spare_parts":
+        records = await db.maintenance.find(
+            {"organization_id": org_id, "spare_parts": {"$exists": True, "$ne": []}},
+            {"_id": 0}
+        ).to_list(500)
+        result = []
+        for m in records:
+            mach = await db.machinery.find_one({"machinery_id": m.get("machinery_id")}, {"_id": 0})
+            machine_name = mach.get("machine_type", "Unknown") if mach else "Unknown"
+            # Resolve mechanic name
+            mechanic_name = m.get("mechanic_name")
+            if not mechanic_name or mechanic_name in ("N/A", "Unknown"):
+                mid = m.get("mechanic_id")
+                if mid and mid != "unassigned":
+                    mech_user = await db.users.find_one({"username": mid}, {"_id": 0})
+                    mechanic_name = mech_user.get("full_name", mid) if mech_user else mid
+                else:
+                    mechanic_name = "Unassigned"
+            for part in m.get("spare_parts", []):
+                if part.get("status") in ("approved", "provided"):
+                    result.append({
+                        "date": m.get("created_at", ""),
+                        "machine": machine_name,
+                        "part_name": part.get("part_name", "Unknown"),
+                        "cost": round(part.get("cost", part.get("estimated_cost", 0)), 2),
+                        "mechanic": mechanic_name,
+                        "status": part.get("status", "approved")
+                    })
         return result
 
     else:
@@ -1216,8 +1320,8 @@ async def get_report_details(report_type: str, current_user: UserResponse = Depe
 @api_router.post("/wages/generate-managers")
 async def generate_manager_payroll(current_user: UserResponse = Depends(get_current_user)):
     """Generate monthly salary records for all org_admin managers."""
-    if current_user.role not in ["owner", "org_admin"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    if current_user.role != "owner":
+        raise HTTPException(status_code=403, detail="Only the Owner can run Manager payroll.")
     now = datetime.now(timezone.utc)
     month_key = now.strftime("%Y-%m")  # e.g. "2026-03"
     org_id = current_user.organization_id
@@ -1274,21 +1378,29 @@ async def register_mechanic(mechanic_data: MechanicRegister):
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     username = mechanic_data.email.split('@')[0] + str(random.randint(1000, 9999))
+
+    # NO password at registration — credentials generated only on admin approval
     user_data = {
         "username": username,
         "full_name": mechanic_data.full_name,
         "role": "mechanic",
         "email": mechanic_data.email,
         "phone": mechanic_data.phone,
-        "password_hash": hash_password(mechanic_data.password),
+        "password_hash": None,
         "organization_id": None,  # Global contractor — no tenant
         "skills": mechanic_data.skills,
         "hourly_rate": mechanic_data.hourly_rate,
+        "lat": mechanic_data.latitude,
+        "lng": mechanic_data.longitude,
+        "must_change_password": True,
         "status": "Pending",  # Requires Super Admin approval before first login
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.users.insert_one(user_data)
-    return {"message": f"Application submitted! Your username is '{username}'. You can log in once a Super Admin approves your account.", "username": username}
+    return {
+        "message": f"Application submitted! Your username is '{username}'. Your account is pending admin approval.",
+        "username": username
+    }
 
 # ============ SUSPENSION & SUPPORT TICKETING ============
 
@@ -1569,6 +1681,7 @@ async def create_organization(org: OrganizationCreate, current_user: UserRespons
         "phone": org.phone,
         "password_hash": hash_password(temp_password),
         "organization_id": new_org_id,
+        "must_change_password": True,
         "status": "Active",
         "created_at": now
     }
@@ -1970,6 +2083,8 @@ async def get_employees(current_user: UserResponse = Depends(get_current_user)):
             "skill": emp_record.get("skill") if emp_record else "N/A",
             "joining_date": emp_record.get("joining_date") if emp_record else datetime.now(timezone.utc).isoformat(),
             "wage_rate": emp_record.get("wage_rate", 0.0) if emp_record else 0.0,
+            "monthly_salary": u.get("monthly_salary", 0.0),
+            "hourly_wage": u.get("hourly_wage", 0.0),
             "created_at": emp_record.get("created_at") if emp_record else datetime.now(timezone.utc).isoformat(),
             "organization_id": u.get("organization_id", "default_org")
         })
@@ -2873,11 +2988,17 @@ async def complete_maintenance_job(maintenance_id: str, body: CompleteJobRequest
         {"maintenance_id": maintenance_id},
         {"$set": {"status": "completed", "completed_at": now}}
     )
-    # Persist labor_charge to maintenance record before generating wage
+    # Persist labor_charge and spare_parts_cost to maintenance record before generating wage
     labor_charge = body.labor_charge if body.labor_charge > 0 else record.get("labor_cost", 0.0)
+    spare_parts_cost = body.spare_parts_cost if body.spare_parts_cost > 0 else record.get("spare_parts_cost", 0.0)
+    total_cost = labor_charge + spare_parts_cost
     await db.maintenance.update_one(
         {"maintenance_id": maintenance_id},
-        {"$set": {"labor_cost": labor_charge, "total_cost": labor_charge + record.get("spare_parts_cost", 0.0)}}
+        {"$set": {
+            "labor_cost": labor_charge,
+            "spare_parts_cost": spare_parts_cost,
+            "total_cost": total_cost
+        }}
     )
     # Generate wage record for mechanic
     wage_data = {
@@ -3148,6 +3269,23 @@ async def get_dashboard_stats(current_user: UserResponse = Depends(get_current_u
             average_rating = round(rating_agg[0]["avg_rating"], 1)
             total_reviews = rating_agg[0]["review_count"]
     
+    # Calculate total spare parts cost from approved parts
+    maint_with_parts = await db.maintenance.find(
+        {**org_filter, "spare_parts": {"$exists": True, "$ne": []}},
+        {"_id": 0, "spare_parts": 1, "spare_parts_cost": 1}
+    ).to_list(5000)
+    total_spare_parts_cost = 0.0
+    for rec in maint_with_parts:
+        parts = rec.get("spare_parts", [])
+        if parts:
+            total_spare_parts_cost += sum(
+                p.get("cost", p.get("estimated_cost", 0))
+                for p in parts
+                if p.get("status") in ("approved", "provided")
+            )
+        else:
+            total_spare_parts_cost += rec.get("spare_parts_cost", 0)
+
     # Update DashboardStats return (requires model update too)
     return {
         "total_revenue": total_revenue,
@@ -3157,7 +3295,8 @@ async def get_dashboard_stats(current_user: UserResponse = Depends(get_current_u
         "total_farmers": total_farmers,
         "total_employees": total_employees,
         "average_rating": average_rating,
-        "total_reviews": total_reviews
+        "total_reviews": total_reviews,
+        "total_spare_parts_cost": total_spare_parts_cost
     }
 
 @api_router.get("/reports/revenue")
@@ -3383,12 +3522,24 @@ async def get_financial_report(
     invoices = await db.invoices.find(inv_query, {"_id": 0, "amount": 1}).to_list(5000)
     total_revenue = sum(inv.get("amount", 0) for inv in invoices)
 
-    # ── Maintenance costs ───────────────────────────────────────────
+    # ── Maintenance costs (split into labor vs approved spare parts) ──
     maint_query = {**org_filter}
     if date_match:
         maint_query["created_at"] = date_match
-    maint_records = await db.maintenance.find(maint_query, {"_id": 0, "total_cost": 1}).to_list(5000)
-    total_maintenance_costs = sum(rec.get("total_cost", 0) for rec in maint_records)
+    maint_records = await db.maintenance.find(maint_query, {"_id": 0, "labor_cost": 1, "spare_parts": 1, "spare_parts_cost": 1, "total_cost": 1}).to_list(5000)
+    total_labor_cost = sum(rec.get("labor_cost", 0) for rec in maint_records)
+    # Sum approved spare parts from the spare_parts array, fallback to spare_parts_cost field
+    total_spare_parts_cost = 0
+    for rec in maint_records:
+        parts = rec.get("spare_parts", [])
+        if parts:
+            total_spare_parts_cost += sum(
+                p.get("cost", p.get("estimated_cost", 0))
+                for p in parts
+                if p.get("status") in ("approved", "provided")
+            )
+        else:
+            total_spare_parts_cost += rec.get("spare_parts_cost", 0)
 
     # ── Wages paid ──────────────────────────────────────────────────
     wage_query = {**org_filter}
@@ -3397,12 +3548,22 @@ async def get_financial_report(
     wages = await db.wages.find(wage_query, {"_id": 0, "wage_amount": 1}).to_list(5000)
     total_wages_paid = sum(w.get("wage_amount", 0) for w in wages)
 
-    net_profit = total_revenue - total_maintenance_costs - total_wages_paid
+    # ── Diesel / fuel costs ─────────────────────────────────────────
+    fuel_query = {**org_filter}
+    if date_match:
+        fuel_query["date"] = date_match
+    fuel_records = await db.fuel_expenses.find(fuel_query, {"_id": 0, "total_cost": 1}).to_list(5000)
+    total_diesel = sum(rec.get("total_cost", 0) for rec in fuel_records)
+
+    net_profit = total_revenue - total_labor_cost - total_spare_parts_cost - total_wages_paid - total_diesel
 
     return {
         "total_revenue": total_revenue,
-        "total_maintenance_costs": total_maintenance_costs,
+        "total_labor_cost": total_labor_cost,
+        "total_spare_parts_cost": total_spare_parts_cost,
+        "total_maintenance_costs": total_labor_cost + total_spare_parts_cost,
         "total_wages_paid": total_wages_paid,
+        "total_diesel": total_diesel,
         "net_profit": net_profit,
     }
 

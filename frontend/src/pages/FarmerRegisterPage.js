@@ -12,7 +12,6 @@ export default function FarmerRegisterPage() {
     full_name: '',
     email: '',
     phone: '',
-    password: '',
     village: '',
     land_size: ''
   });
@@ -23,12 +22,15 @@ export default function FarmerRegisterPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      await api.post('/auth/register-farmer', {
+      const res = await api.post('/auth/register-farmer', {
         ...formData,
         land_size: parseFloat(formData.land_size)
       });
-      // Admin verification required
-      toast.success('Registration successful! Please wait for admin approval before logging in.');
+      const username = res.data.username;
+      toast.success(
+        `Registration submitted successfully!\n\nYour username: ${username}\n\nYour account is pending admin approval. You will receive your login credentials once approved.`,
+        { duration: 15000 }
+      );
       navigate('/login');
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Registration failed');
@@ -131,19 +133,6 @@ export default function FarmerRegisterPage() {
                 onChange={(e) => setFormData({ ...formData, land_size: e.target.value })}
                 required
                 placeholder="10.5"
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="password">Password *</Label>
-              <Input
-                id="password"
-                data-testid="farmer-password-input"
-                type="password"
-                value={formData.password}
-                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                required
-                placeholder="Create a secure password"
               />
             </div>
 

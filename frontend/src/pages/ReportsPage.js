@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../api/axios';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { BarChart3, TrendingUp, Wrench, DollarSign, Fuel, TrendingDown, Download, Calendar, Search } from 'lucide-react';
+import { BarChart3, TrendingUp, Wrench, DollarSign, Fuel, TrendingDown, Download, Calendar, Search, Users, UserCircle, AlertCircle, FileText, Tractor, Star } from 'lucide-react';
 import { toast } from 'sonner';
 
 const COLORS = ['#0F3D3E', '#F97316', '#10B981', '#3B82F6', '#F59E0B', '#8B5CF6'];
@@ -28,10 +28,21 @@ export default function ReportsPage() {
   const [detailData, setDetailData] = useState([]);
   const [detailLoading, setDetailLoading] = useState(false);
 
+  // ── Dashboard KPI stats state ────────────────────────────────────
+  const [dashStats, setDashStats] = useState(null);
+
   // ── Load existing reports on mount ───────────────────────────────
   useEffect(() => {
     fetchReports();
+    fetchDashStats();
   }, []);
+
+  const fetchDashStats = async () => {
+    try {
+      const res = await api.get('/dashboard');
+      setDashStats(res.data);
+    } catch { /* silently fail — KPIs are optional */ }
+  };
 
   const fetchReports = async () => {
     try {
@@ -113,8 +124,10 @@ export default function ReportsPage() {
     rows.push(['Metric', 'Amount (INR)']);
     if (financialData) {
       rows.push(['Total Revenue', financialData.total_revenue ?? 0]);
-      rows.push(['Maintenance Costs', financialData.total_maintenance_costs ?? 0]);
+      rows.push(['Labor Costs', financialData.total_labor_cost ?? 0]);
+      rows.push(['Spare Parts Cost', financialData.total_spare_parts_cost ?? 0]);
       rows.push(['Wages Paid', financialData.total_wages_paid ?? 0]);
+      rows.push(['Diesel Costs', financialData.total_diesel ?? 0]);
       rows.push(['Net Profit', financialData.net_profit ?? 0]);
     }
     rows.push([]);
@@ -167,10 +180,32 @@ export default function ReportsPage() {
   };
 
   // ── Detail CSV Export ─────────────────────────────────────────────
+  // Aggregation helpers
+  const isNumericColumn = (key) => {
+    const k = key.toLowerCase();
+    return ['cost', 'amount', 'liters', 'wage', 'price', 'total', 'charge', 'parts', 'hours', 'quantity'].some(keyword => k.includes(keyword));
+  };
+
+  const calculateFooterValue = (key) => {
+    if (!detailData || detailData.length === 0) return 0;
+    const k = key.toLowerCase();
+    // Rate columns (e.g. "cost per liter") → calculate average
+    if (k.includes('per')) {
+      const validRows = detailData.filter(row => Number(row[key]) > 0);
+      if (validRows.length === 0) return 0;
+      const sum = validRows.reduce((acc, row) => acc + Number(row[key]), 0);
+      return (sum / validRows.length).toFixed(2);
+    }
+    // Everything else → sum
+    return detailData.reduce((sum, row) => sum + (Number(row[key]) || 0), 0);
+  };
+
   const exportDetailCSV = () => {
     if (!detailData || detailData.length === 0) return;
     const keys = Object.keys(detailData[0]).filter(k => k !== '_id' && k !== 'tenant_id');
-    const csvContent = [
+
+    // Header + data rows
+    const csvRows = [
       keys.join(','),
       ...detailData.map(row => keys.map(k => {
         let val = row[k];
@@ -179,14 +214,32 @@ export default function ReportsPage() {
         }
         return `"${String(val ?? '').replace(/"/g, '""')}"`;
       }).join(','))
-    ].join('\n');
+    ];
+
+    // Totals row
+    const totalsRow = keys.map((k, index) => {
+      if (index === 0) return '"TOTALS"';
+      if (isNumericColumn(k)) {
+        const val = calculateFooterValue(k);
+        const label = k.toLowerCase().includes('per') ? `${val} (Avg)` : val;
+        return `"${label}"`;
+      }
+      return '"-"';
+    }).join(',');
+
+    csvRows.push(keys.map(() => '').join(','));  // blank row
+    csvRows.push(totalsRow);
+    csvRows.push(keys.map(() => '').join(','));  // blank row
+    csvRows.push(`"STATISTICS","Total Records: ${detailData.length}"`);
+
+    const csvContent = csvRows.join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `${selectedDetailType}_report.csv`;
+    link.download = `${selectedDetailType}_report_with_totals.csv`;
     link.click();
     URL.revokeObjectURL(link.href);
-    toast.success('CSV exported!');
+    toast.success('CSV exported with totals!');
   };
 
   // ── Loading state ───────────────────────────────────────────────
@@ -214,6 +267,32 @@ export default function ReportsPage() {
         </h1>
         <p className="mt-1 text-muted-foreground">View business insights, performance metrics, and generate custom reports</p>
       </div>
+
+      {/* ══════════ KPI Summary Grid ══════════ */}
+      {dashStats && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[
+            { title: 'Total Revenue', value: `₹${(dashStats.total_revenue || 0).toLocaleString()}`, icon: DollarSign, color: 'text-green-600', bg: 'bg-green-50' },
+            { title: 'Total Bookings', value: dashStats.total_bookings || 0, icon: FileText, color: 'text-blue-600', bg: 'bg-blue-50' },
+            { title: 'Active Machinery', value: dashStats.active_machinery || 0, icon: Tractor, color: 'text-primary', bg: 'bg-primary/10' },
+            { title: 'Pending Payments', value: `₹${(dashStats.pending_payments || 0).toLocaleString()}`, icon: AlertCircle, color: 'text-accent', bg: 'bg-accent/10' },
+            { title: 'Total Farmers', value: dashStats.total_farmers || 0, icon: Users, color: 'text-purple-600', bg: 'bg-purple-50' },
+            { title: 'Total Employees', value: dashStats.total_employees || 0, icon: UserCircle, color: 'text-indigo-600', bg: 'bg-indigo-50' },
+            { title: 'Total Spare Parts', value: `₹${(dashStats.total_spare_parts_cost || 0).toLocaleString()}`, icon: Wrench, color: 'text-orange-600', bg: 'bg-orange-50' },
+            { title: 'Company Rating', value: `⭐ ${dashStats.average_rating?.toFixed(1) || '0.0'} / 5.0 (${dashStats.total_reviews || 0})`, icon: Star, color: 'text-yellow-600', bg: 'bg-yellow-50' },
+          ].map((card, i) => (
+            <div key={i} className="bg-card border border-border p-5 rounded-xl shadow-sm flex items-start justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground font-medium">{card.title}</p>
+                <p className="text-2xl font-bold font-heading mt-1">{card.value}</p>
+              </div>
+              <div className={`${card.bg} ${card.color} p-3 rounded-lg`}>
+                <card.icon className="h-5 w-5" />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ══════════ NEW: Date Controls & Generate ══════════ */}
       <div className="bg-card border border-border rounded-xl shadow-sm p-6">
@@ -259,58 +338,7 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      {/* ══════════ NEW: Financial Summary ══════════ */}
-      {financialData && (
-        <div className="bg-card border border-border rounded-xl shadow-sm p-6">
-          <h3 className="text-lg font-semibold font-heading mb-4 flex items-center gap-2">
-            <DollarSign className="h-5 w-5 text-green-600" />
-            Financial Summary
-            <span className="ml-2 text-xs font-normal text-muted-foreground">({startDate} → {endDate})</span>
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {/* Revenue */}
-            <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-green-50 to-emerald-100 border border-green-200 p-6">
-              <div className="absolute top-3 right-3 bg-green-200 text-green-700 p-2 rounded-lg opacity-60">
-                <TrendingUp className="h-6 w-6" />
-              </div>
-              <p className="text-sm text-green-700 font-medium">Total Revenue</p>
-              <p className="text-3xl font-bold font-mono text-green-800 mt-2">₹{financialData.total_revenue?.toLocaleString()}</p>
-            </div>
 
-            {/* Maintenance Costs */}
-            <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-red-50 to-rose-100 border border-red-200 p-6">
-              <div className="absolute top-3 right-3 bg-red-200 text-red-700 p-2 rounded-lg opacity-60">
-                <Wrench className="h-6 w-6" />
-              </div>
-              <p className="text-sm text-red-700 font-medium">Maintenance Costs</p>
-              <p className="text-3xl font-bold font-mono text-red-800 mt-2">₹{financialData.total_maintenance_costs?.toLocaleString()}</p>
-            </div>
-
-            {/* Wages Paid */}
-            <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-purple-50 to-violet-100 border border-purple-200 p-6">
-              <div className="absolute top-3 right-3 bg-purple-200 text-purple-700 p-2 rounded-lg opacity-60">
-                <DollarSign className="h-6 w-6" />
-              </div>
-              <p className="text-sm text-purple-700 font-medium">Wages Paid</p>
-              <p className="text-3xl font-bold font-mono text-purple-800 mt-2">₹{financialData.total_wages_paid?.toLocaleString()}</p>
-            </div>
-
-            {/* Net Profit */}
-            <div className={`relative overflow-hidden rounded-xl p-6 border ${financialData.net_profit >= 0
-              ? 'bg-gradient-to-br from-emerald-50 to-teal-100 border-emerald-200'
-              : 'bg-gradient-to-br from-red-50 to-rose-100 border-red-200'
-              }`}>
-              <div className={`absolute top-3 right-3 p-2 rounded-lg opacity-60 ${financialData.net_profit >= 0 ? 'bg-emerald-200 text-emerald-700' : 'bg-red-200 text-red-700'}`}>
-                {financialData.net_profit >= 0 ? <TrendingUp className="h-6 w-6" /> : <TrendingDown className="h-6 w-6" />}
-              </div>
-              <p className={`text-sm font-medium ${financialData.net_profit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>Net Profit</p>
-              <p className={`text-3xl font-bold font-mono mt-2 ${financialData.net_profit >= 0 ? 'text-emerald-800' : 'text-red-800'}`}>
-                {financialData.net_profit >= 0 ? '+' : ''}₹{financialData.net_profit?.toLocaleString()}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ══════════ NEW: Fleet Utilization Table ══════════ */}
       {utilizationData.length > 0 && (
@@ -364,6 +392,7 @@ export default function ReportsPage() {
               <option value="diesel">Diesel / Fuel Logs</option>
               <option value="wages">Wage Payouts</option>
               <option value="maintenance">Maintenance & Repairs</option>
+              <option value="spare_parts">Approved Spare Parts</option>
             </select>
             <button
               onClick={exportDetailCSV}
@@ -405,73 +434,33 @@ export default function ReportsPage() {
                   </tr>
                 ))}
               </tbody>
+              <tfoot className="bg-muted/20 border-t-2 border-border">
+                <tr className="font-bold text-foreground">
+                  {Object.keys(detailData[0]).filter(k => k !== '_id' && k !== 'tenant_id').map((key, index) => (
+                    <td key={`footer-${key}`} className="px-4 py-3">
+                      {index === 0 ? (
+                        <span className="uppercase text-xs tracking-wider text-muted-foreground">Report Totals</span>
+                      ) : isNumericColumn(key) ? (
+                        <span className="font-mono">
+                          {key.toLowerCase().includes('liters') || key.toLowerCase().includes('hours') || key.toLowerCase().includes('quantity') ? '' : '₹'}
+                          {Number(calculateFooterValue(key)).toLocaleString('en-IN')}
+                          {key.toLowerCase().includes('per') && ' (Avg)'}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                  ))}
+                </tr>
+                <tr>
+                  <td colSpan={Object.keys(detailData[0]).filter(k => k !== '_id' && k !== 'tenant_id').length} className="px-4 py-2 text-xs text-muted-foreground">
+                    📊 {detailData.length} records · Report generated {new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         )}
-      </div>
-
-      {/* ══════════ EXISTING: Summary Stats ══════════ */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div className="bg-card border border-border p-6 rounded-xl shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground font-medium">Total Revenue</p>
-              <p className="text-3xl font-bold font-mono text-foreground mt-2">₹{revenueReport?.total_revenue?.toLocaleString() || 0}</p>
-            </div>
-            <div className="bg-green-100 text-green-600 p-3 rounded-lg">
-              <TrendingUp className="h-6 w-6" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-card border border-border p-6 rounded-xl shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground font-medium">Pending Revenue</p>
-              <p className="text-3xl font-bold font-mono text-foreground mt-2">₹{revenueReport?.pending_revenue?.toLocaleString() || 0}</p>
-            </div>
-            <div className="bg-orange-100 text-accent p-3 rounded-lg">
-              <DollarSign className="h-6 w-6" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-card border border-border p-6 rounded-xl shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground font-medium">Total Maintenance</p>
-              <p className="text-3xl font-bold font-heading text-foreground mt-2">{maintenanceReport?.total_maintenance || 0}</p>
-            </div>
-            <div className="bg-blue-100 text-blue-600 p-3 rounded-lg">
-              <Wrench className="h-6 w-6" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-card border border-border p-6 rounded-xl shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground font-medium">Total Wages Paid</p>
-              <p className="text-3xl font-bold font-mono text-foreground mt-2">₹{wagesReport?.total_wages_paid?.toLocaleString() || 0}</p>
-            </div>
-            <div className="bg-purple-100 text-purple-600 p-3 rounded-lg">
-              <DollarSign className="h-6 w-6" />
-            </div>
-          </div>
-        </div>
-
-        {/* Diesel Cost card */}
-        <div className="bg-card border border-border p-6 rounded-xl shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground font-medium">Total Diesel Cost</p>
-              <p className="text-3xl font-bold font-mono text-foreground mt-2">₹{roiReport?.org_totals?.total_diesel_cost?.toLocaleString() || 0}</p>
-            </div>
-            <div className="bg-amber-100 text-amber-600 p-3 rounded-lg">
-              <Fuel className="h-6 w-6" />
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* Net ROI Summary */}

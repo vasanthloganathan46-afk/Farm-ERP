@@ -304,25 +304,6 @@ export default function LoginPage() {
               </form>
             </DialogContent>
           </Dialog>
-
-          <div className="p-4 bg-muted/50 rounded-lg border border-border">
-            <p className="text-sm font-semibold text-foreground mb-3">Demo Credentials</p>
-            <div className="grid grid-cols-1 gap-2 text-sm">
-              {[
-                ['admin', 'Super Admin (admin123)'],
-                ['manager', 'Org Admin (manager123)'],
-                ['owner', 'Owner / Read-Only (owner123)'],
-                ['operator1', 'Operator (op123)'],
-                ['mechanic1', 'Mechanic (mech123)'],
-                ['farmer1', 'Farmer (farmer123)'],
-              ].map(([uname, label]) => (
-                <div key={uname} className="flex justify-between items-center p-2 bg-background rounded border border-border">
-                  <span className="font-mono font-medium">{uname}</span>
-                  <span className="text-muted-foreground text-xs">{label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
     </div>

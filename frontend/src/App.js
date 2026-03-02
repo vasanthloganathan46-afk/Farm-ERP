@@ -21,6 +21,8 @@ import MaintenancePage from './pages/MaintenancePage';
 import WagesPage from './pages/WagesPage';
 import ReportsPage from './pages/ReportsPage';
 import OperatorsPage from './pages/OperatorsPage';
+import OperatorDashboard from './pages/OperatorDashboard';
+import MechanicDashboard from './pages/MechanicDashboard';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import MechanicRegisterPage from './pages/MechanicRegisterPage';
@@ -49,6 +51,10 @@ function App() {
             <Route path="farmer/dashboard" element={<FarmerDashboardPage />} />
             <Route path="farmer/browse" element={<FarmerBrowsePage />} />
             <Route path="farmer/bookings" element={<FarmerBookingsPage />} />
+            {/* Operator Routes */}
+            <Route path="operator/dashboard" element={<OperatorDashboard />} />
+            {/* Mechanic Routes */}
+            <Route path="mechanic/dashboard" element={<MechanicDashboard />} />
             <Route path="farmer/invoices" element={<FarmerInvoicesPage />} />
             {/* Admin/Staff Routes */}
             <Route path="farmers" element={<FarmersPage />} />
@@ -77,8 +83,8 @@ function RoleBasedRedirect() {
   if (!user) return <Navigate to="/login" replace />;
 
   if (user.role === 'farmer') return <Navigate to="/farmer/dashboard" replace />;
-  if (user.role === 'operator') return <Navigate to="/field-operations" replace />;
-  if (user.role === 'mechanic') return <Navigate to="/maintenance" replace />;
+  if (user.role === 'operator') return <Navigate to="/operator/dashboard" replace />;
+  if (user.role === 'mechanic') return <Navigate to="/mechanic/dashboard" replace />;
   if (user.role === 'super_admin') return <Navigate to="/admin/dashboard" replace />;
 
   return <Navigate to="/dashboard" replace />;
