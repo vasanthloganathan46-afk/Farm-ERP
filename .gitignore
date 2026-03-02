@@ -80,3 +80,6 @@ agenthub/agents/youtube/db
 android-sdk/ frontend/node_modules/.cache/default-development/0.pack
 farm-machinery-erp.zip
 frontend/node_modules/.cache/default-development/0.pack
+
+
+backend/.env

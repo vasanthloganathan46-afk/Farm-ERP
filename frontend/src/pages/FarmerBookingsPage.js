@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../api/axios';
-import { FileText, Clock, CheckCircle, XCircle, Star } from 'lucide-react';
+import { FileText, Clock, CheckCircle, XCircle, Star, Download } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '../components/ui/button';
 import {
@@ -86,18 +86,70 @@ export default function FarmerBookingsPage() {
     }
   };
 
+  // ── CSV Export ─────────────────────────────────────────────────────
+  const exportToCSV = () => {
+    if (!bookings || bookings.length === 0) {
+      toast.error('No bookings available to export.');
+      return;
+    }
+    const headers = ['Booking Date', 'Machine', 'Location', 'Operator', 'Status', 'Expected Hours', 'Expected Acres', 'Total Cost', 'Rating'];
+    const csvRows = [
+      headers.join(','),
+      ...bookings.map(b => {
+        const date = b.booking_date ? new Date(b.booking_date).toLocaleDateString('en-IN') : 'N/A';
+        const machine = b.machine_type || b.machine_name || 'Unknown';
+        const location = (b.field_location || 'N/A').replace(/,/g, ' ');
+        const operator = b.operator_name || 'Unassigned';
+        const status = b.status || 'Pending';
+        const hours = b.expected_hours || '0';
+        const acres = b.expected_acres || '0';
+        const cost = b.total_cost || b.cost || b.amount || b.price || b.total_amount || 0;
+        const rating = b.rating || '-';
+        return `"${date}","${machine}","${location}","${operator}","${status}","${hours}","${acres}","₹${cost}","${rating}"`;
+      })
+    ];
+    // Totals
+    const totalCost = bookings.reduce((sum, b) => {
+      return sum + Number(b.total_cost || b.cost || b.amount || b.price || b.total_amount || 0);
+    }, 0);
+    csvRows.push(headers.map(() => '').join(','));
+    csvRows.push(`"TOTALS","-","-","-","-","-","-","₹${totalCost}","-"`);
+    csvRows.push(`"SUMMARY","Total Bookings: ${bookings.length}","","","","","","",""`);
+
+    const csvContent = csvRows.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'My_Bookings_Report.csv';
+    link.click();
+    URL.revokeObjectURL(link.href);
+    toast.success('Booking history exported!');
+  };
+
   if (loading) {
     return <div className="flex items-center justify-center h-full"><div className="text-muted-foreground">Loading...</div></div>;
   }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-4xl font-bold font-heading text-foreground tracking-tight flex items-center">
-          <FileText className="h-10 w-10 mr-3 text-primary" />
-          My Bookings
-        </h1>
-        <p className="mt-1 text-muted-foreground">Track your machinery rental requests and status</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-4xl font-bold font-heading text-foreground tracking-tight flex items-center">
+            <FileText className="h-10 w-10 mr-3 text-primary" />
+            My Bookings
+          </h1>
+          <p className="mt-1 text-muted-foreground">Track your machinery rental requests and status</p>
+        </div>
+        {bookings.length > 0 && (
+          <button
+            onClick={exportToCSV}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-border bg-card text-foreground font-semibold hover:bg-muted/50 transition-colors text-sm"
+            title="Download your booking history as a spreadsheet"
+          >
+            <Download className="h-4 w-4" />
+            📥 Export CSV
+          </button>
+        )}
       </div>
 
       {bookings.length === 0 ? (
@@ -156,6 +208,12 @@ export default function FarmerBookingsPage() {
                 <div>
                   <p className="text-xs text-muted-foreground">Approval Status</p>
                   <p className="text-sm font-medium text-foreground mt-1">{booking.approval_status}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Total Cost</p>
+                  <p className="text-sm font-bold font-mono text-green-700 mt-1">
+                    ₹{Number(booking.total_cost || booking.cost || booking.amount || booking.price || booking.total_amount || 0).toLocaleString()}
+                  </p>
                 </div>
               </div>
               {booking.status === 'Pending' && booking.approval_status === 'Pending' && (

@@ -1313,6 +1313,65 @@ async def get_report_details(report_type: str, current_user: UserResponse = Depe
                     })
         return result
 
+    elif report_type == "farmer_bookings":
+        bookings = await db.bookings.find(
+            {"organization_id": org_id},
+            {"_id": 0}
+        ).to_list(1000)
+        result = []
+        for b in bookings:
+            # Resolve farmer name
+            farmer_name = "Unknown"
+            fid = b.get("farmer_id")
+            if fid:
+                try:
+                    farmer = await db.users.find_one({"username": fid}, {"_id": 0})
+                    if not farmer:
+                        from bson import ObjectId as BsonObjectId
+                        farmer = await db.users.find_one({"_id": BsonObjectId(str(fid))})
+                    if farmer:
+                        farmer_name = farmer.get("full_name") or farmer.get("name") or fid
+                except Exception:
+                    farmer_name = str(fid)
+
+            # Resolve machine name
+            machine_name = "Unknown"
+            mid = b.get("machinery_id") or b.get("machine_id") or b.get("equipment_id")
+            if mid:
+                try:
+                    mach = await db.machinery.find_one({"machinery_id": mid}, {"_id": 0})
+                    if not mach:
+                        from bson import ObjectId as BsonObjectId
+                        mach = await db.machinery.find_one({"_id": BsonObjectId(str(mid))})
+                    if mach:
+                        machine_name = mach.get("machine_type") or mach.get("name") or mid
+                except Exception:
+                    machine_name = str(mid)
+
+            # Resolve operator name
+            operator_name = "Unassigned"
+            oid = b.get("operator_id")
+            if oid:
+                try:
+                    op = await db.users.find_one({"username": oid}, {"_id": 0})
+                    if not op:
+                        from bson import ObjectId as BsonObjectId
+                        op = await db.users.find_one({"_id": BsonObjectId(str(oid))})
+                    if op:
+                        operator_name = op.get("full_name") or op.get("name") or oid
+                except Exception:
+                    operator_name = str(oid)
+
+            result.append({
+                "date": b.get("booking_date", b.get("created_at", "N/A")),
+                "farmer": farmer_name,
+                "machine": machine_name,
+                "operator": operator_name,
+                "location": b.get("field_location", "N/A"),
+                "status": b.get("status", "Pending")
+            })
+        return result
+
     else:
         raise HTTPException(status_code=400, detail=f"Unknown report type: {report_type}")
 
