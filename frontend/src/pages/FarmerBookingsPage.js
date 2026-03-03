@@ -92,32 +92,41 @@ export default function FarmerBookingsPage() {
       toast.error('No bookings available to export.');
       return;
     }
-    const headers = ['Booking Date', 'Machine', 'Location', 'Operator', 'Status', 'Expected Hours', 'Expected Acres', 'Total Cost', 'Rating'];
+
+    // 1. Updated Headers — Actual instead of Expected
+    const headers = ['Booking Date', 'Machine', 'Location', 'Operator', 'Status', 'Actual Hours', 'Actual Acres', 'Total Cost', 'Rating'];
     const csvRows = [
       headers.join(','),
       ...bookings.map(b => {
-        const date = b.booking_date ? new Date(b.booking_date).toLocaleDateString('en-IN') : 'N/A';
+        const date = (b.booking_date || b.created_at) ? new Date(b.booking_date || b.created_at).toLocaleDateString('en-IN') : 'N/A';
         const machine = b.machine_type || b.machine_name || 'Unknown';
         const location = (b.field_location || 'N/A').replace(/,/g, ' ');
         const operator = b.operator_name || 'Unassigned';
         const status = b.status || 'Pending';
-        const hours = b.expected_hours || '0';
-        const acres = b.expected_acres || '0';
-        const cost = b.total_cost || b.cost || b.amount || b.price || b.total_amount || 0;
+
+        // Use actuals instead of expected — aggressive fallbacks
+        const hours = b.actual_hours || b.logged_hours || b.completed_hours || '-';
+        const acres = b.actual_acres || b.logged_acres || b.completed_acres || '-';
+
+        // Raw number (no ₹) so Excel can do math
+        const cost = Number(b.total_cost || b.cost || b.amount || b.price || b.final_cost || b.total_amount || 0);
         const rating = b.rating || '-';
-        return `"${date}","${machine}","${location}","${operator}","${status}","${hours}","${acres}","₹${cost}","${rating}"`;
+        return `"${date}","${machine}","${location}","${operator}","${status}","${hours}","${acres}","${cost}","${rating}"`;
       })
     ];
+
     // Totals
     const totalCost = bookings.reduce((sum, b) => {
       return sum + Number(b.total_cost || b.cost || b.amount || b.price || b.total_amount || 0);
     }, 0);
-    csvRows.push(headers.map(() => '').join(','));
-    csvRows.push(`"TOTALS","-","-","-","-","-","-","₹${totalCost}","-"`);
+    csvRows.push(',,,,,,,,');
+    csvRows.push(`"TOTALS","-","-","-","-","-","-","${totalCost}","-"`);
     csvRows.push(`"SUMMARY","Total Bookings: ${bookings.length}","","","","","","",""`);
 
     const csvContent = csvRows.join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+
+    // 2. UTF-8 BOM so Excel renders ₹ and other symbols correctly
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = 'My_Bookings_Report.csv';

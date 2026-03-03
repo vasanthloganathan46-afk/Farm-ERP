@@ -394,6 +394,8 @@ export default function ReportsPage() {
               <option value="maintenance">Maintenance & Repairs</option>
               <option value="spare_parts">Approved Spare Parts</option>
               <option value="farmer_bookings">Farmer Bookings &amp; Assignments</option>
+              <option value="farmer_details">Farmer Directory &amp; Revenue</option>
+              <option value="employee_details">Employee Roster &amp; Wages</option>
             </select>
             <button
               onClick={exportDetailCSV}

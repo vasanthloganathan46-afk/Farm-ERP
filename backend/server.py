@@ -237,6 +237,8 @@ class Booking(BaseModel):
     field_location: str
     expected_hours: Optional[float] = None
     expected_acres: Optional[float] = None
+    actual_hours: Optional[float] = None
+    actual_acres: Optional[float] = None
     status: str
     approval_status: str
     created_at: str
@@ -247,6 +249,10 @@ class Booking(BaseModel):
     notes: Optional[str] = None
     rating: Optional[int] = None
     review: Optional[str] = None
+    total_cost: Optional[float] = 0.0
+    cost: Optional[float] = 0.0
+    amount: Optional[float] = 0.0
+    price: Optional[float] = 0.0
 
 class BookingCreate(BaseModel):
     machinery_id: str
@@ -1362,13 +1368,114 @@ async def get_report_details(report_type: str, current_user: UserResponse = Depe
                 except Exception:
                     operator_name = str(oid)
 
+            # ── Resolve actual_hours / actual_acres with field_logs fallback ──
+            actual_hours = b.get("actual_hours") or 0
+            actual_acres = b.get("actual_acres") or 0
+            if not actual_hours and not actual_acres:
+                # Fallback: check field_logs collection for this booking
+                field_log = await db.field_logs.find_one(
+                    {"booking_id": b.get("booking_id")}, {"_id": 0}
+                )
+                if field_log:
+                    actual_hours = field_log.get("actual_hours") or 0
+                    actual_acres = field_log.get("actual_acres") or 0
+            # Final fallback to expected values
+            if not actual_hours:
+                actual_hours = b.get("expected_hours") or 0
+            if not actual_acres:
+                actual_acres = b.get("expected_acres") or 0
+
+            # ── Calculate cost with aggressive fallbacks ──
+            booking_cost = b.get("total_cost") or b.get("cost") or b.get("amount") or b.get("price") or b.get("total_amount") or 0
+            # Fallback: check invoice for this booking
+            if not booking_cost:
+                invoice = await db.invoices.find_one(
+                    {"booking_id": b.get("booking_id")}, {"_id": 0, "amount": 1}
+                )
+                if invoice:
+                    booking_cost = invoice.get("amount", 0)
+            # Fallback: compute from machine rate × actuals
+            if not booking_cost and mid:
+                try:
+                    mach_for_rate = await db.machinery.find_one({"machinery_id": mid}, {"_id": 0})
+                    if mach_for_rate:
+                        rate = mach_for_rate.get("rate_per_hour", 0)
+                        booking_cost = round(rate * actual_hours, 2)
+                except Exception:
+                    pass
+
             result.append({
                 "date": b.get("booking_date", b.get("created_at", "N/A")),
                 "farmer": farmer_name,
                 "machine": machine_name,
                 "operator": operator_name,
                 "location": b.get("field_location", "N/A"),
+                "actual_hours": round(float(actual_hours), 2),
+                "actual_acres": round(float(actual_acres), 2),
+                "cost": round(float(booking_cost), 2),
                 "status": b.get("status", "Pending")
+            })
+        return result
+
+    elif report_type == "farmer_details":
+        # Farmer Directory: all farmers who have booked with this org
+        bookings = await db.bookings.find(
+            {"organization_id": org_id}, {"_id": 0}
+        ).to_list(5000)
+        farmer_ids = list(set([b.get("farmer_id") for b in bookings if b.get("farmer_id")]))
+
+        result = []
+        for fid in farmer_ids:
+            try:
+                farmer = await db.users.find_one({"username": fid}, {"_id": 0})
+                if not farmer:
+                    from bson import ObjectId as BsonObjectId
+                    farmer = await db.users.find_one({"_id": BsonObjectId(str(fid))})
+                if farmer:
+                    f_bookings = [b for b in bookings if b.get("farmer_id") == fid]
+
+                    # ── Primary: sum from invoices (the real billed amount) ──
+                    farmer_invoices = await db.invoices.find(
+                        {"farmer_id": fid, "organization_id": org_id},
+                        {"_id": 0, "amount": 1}
+                    ).to_list(5000)
+                    total_spent = sum(inv.get("amount", 0) for inv in farmer_invoices)
+
+                    # Fallback: if no invoices, try booking cost fields
+                    if not total_spent:
+                        total_spent = sum([
+                            float(b.get("total_cost") or b.get("cost") or b.get("amount") or b.get("price") or b.get("final_cost") or 0)
+                            for b in f_bookings
+                        ])
+
+                    result.append({
+                        "name": farmer.get("full_name") or farmer.get("name") or "Unknown",
+                        "email": farmer.get("email", "N/A"),
+                        "phone": farmer.get("phone", "N/A"),
+                        "village": farmer.get("village", "N/A"),
+                        "total_bookings": len(f_bookings),
+                        "total_spent": round(total_spent, 2)
+                    })
+            except Exception:
+                pass
+        return result
+
+    elif report_type == "employee_details":
+        # Employee Roster: all staff for this org
+        employees = await db.users.find(
+            {"organization_id": org_id, "role": {"$in": ["org_admin", "operator", "mechanic"]}},
+            {"_id": 0, "password_hash": 0}
+        ).to_list(1000)
+
+        result = []
+        for emp in employees:
+            result.append({
+                "name": emp.get("full_name") or emp.get("name") or "Unknown",
+                "role": (emp.get("role") or "Unknown").replace("_", " ").title(),
+                "email": emp.get("email", "N/A"),
+                "phone": emp.get("phone", "N/A"),
+                "salary_or_wage": emp.get("monthly_salary") or emp.get("hourly_wage") or 0,
+                "status": emp.get("status", "Active")
             })
         return result
 
@@ -2260,6 +2367,21 @@ async def get_bookings(current_user: UserResponse = Depends(get_current_user)):
                     booking["operator_name"] = op_user.get("full_name", "Unknown Operator")
                 else:
                     booking["operator_name"] = "Unknown Operator"
+
+        # ── Compute total_cost if missing ────────────────────────────────
+        booking_cost = (
+            booking.get("total_cost")
+            or booking.get("cost")
+            or booking.get("amount")
+            or booking.get("price")
+            or booking.get("total_amount")
+            or 0
+        )
+        if not booking_cost and machinery:
+            rate = machinery.get("rate_per_hour", 0)
+            hours = booking.get("actual_hours") or booking.get("expected_hours") or 0
+            booking_cost = round(rate * hours, 2)
+        booking["total_cost"] = float(booking_cost)
     
     return bookings
 
@@ -2463,10 +2585,29 @@ async def create_field_log(log: FieldLogCreate, current_user: UserResponse = Dep
     # CORRECT ATTRIBUTION: Log belongs to the Booking's Organization
     log_data["organization_id"] = booking.get("organization_id", "default_org")
     
-    # Update booking status to completed
+    # Update booking status to completed AND persist actuals + total_cost
+    booking_update = {"status": "Completed"}
+
+    # Persist actual hours/acres onto the booking itself
+    if log.actual_hours:
+        booking_update["actual_hours"] = log.actual_hours
+    if log.actual_acres:
+        booking_update["actual_acres"] = log.actual_acres
+
+    # Auto-calculate total_cost from machine rate × actuals
+    machinery = await db.machinery.find_one({"machinery_id": booking["machinery_id"]}, {"_id": 0})
+    computed_cost = 0.0
+    if machinery:
+        if log.actual_hours and machinery.get("rate_per_hour"):
+            computed_cost = round(log.actual_hours * machinery["rate_per_hour"], 2)
+        elif log.actual_acres and machinery.get("rate_per_acre"):
+            computed_cost = round(log.actual_acres * machinery["rate_per_acre"], 2)
+    if computed_cost > 0:
+        booking_update["total_cost"] = computed_cost
+
     await db.bookings.update_one(
         {"booking_id": log.booking_id},
-        {"$set": {"status": "Completed"}}
+        {"$set": booking_update}
     )
 
     # AUTO-GENERATE INVOICE
@@ -2488,8 +2629,7 @@ async def create_field_log(log: FieldLogCreate, current_user: UserResponse = Dep
             }
             await db.wages.insert_one(wage_data)
     
-    # Update machinery usage and status
-    machinery = await db.machinery.find_one({"machinery_id": booking["machinery_id"]}, {"_id": 0})
+    # Update machinery usage and status (reuse `machinery` fetched above for cost calc)
     if machinery:
         hours_to_add = log.actual_hours or 0
         await db.machinery.update_one(
